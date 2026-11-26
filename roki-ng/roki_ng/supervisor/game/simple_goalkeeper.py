@@ -163,16 +163,16 @@ class SimpleGoalkeeper(SimpleFootball):
             odom = getattr(self.g, 'odometry', None)
             if odom and odom.confidence != 'degraded':
                 home_x, home_y = odom.body_point((odom.home_x, odom.home_y))
-                depth = -home_x
+                own = self.specs[self.p['match.own_goal']]
+                depth = (odom.x-own['x'])*math.cos(odom.home_heading)
                 fresh = ball is not None and scene.get('confirmed') and time.monotonic()-scene['received'] < .5
-                if depth > .10 and (not fresh or ball[0] < 0 or math.hypot(*ball) > .90):
+                if depth > .21 and (not fresh or ball[0] < 0 or math.hypot(*ball) > .90):
                     self.describe('keeper_return', 'recover goal position')
                     await self.walk(min(.16, math.hypot(home_x, home_y)), math.atan2(home_y, home_x))
                     return
                 if fresh:
                     x, y = ball
-                    step = min(.14, .30-depth, x-.10)
-                    own = self.specs[self.p['match.own_goal']]
+                    step = min(.10, .25-depth, x-.10)
                     _, field_y = odom.field_point(ball)
                     if (.17 < x < .68 and step > .025 and abs(y) < .23
                             and abs(field_y-own['y']) < own['width']/2-.10):

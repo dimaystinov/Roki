@@ -51,9 +51,6 @@ def setup(row, profile):
         match.players[2][2].p['sim.direct_pursuit'] = True
         strategy.p['sim.precise_strike'] = row['quick']
     case = row['case']
-    if case != 'centre':
-        strategy.kickoff_pending = strategy.opening_touch_required = False
-        strategy.attack_axis = world.yaw
     if case == 'one_post':
         model = match.model
         goal = model.body('goal_blue').id
@@ -64,18 +61,20 @@ def setup(row, profile):
         masked = geoms[~upright]
         match.mask = lambda t: masked
     if case == 'lost_ball':
-        match.ball[:2] = [-.22, sign*.26]
         match.mask = lambda t: [match.ball_geom] if 6 <= t < 10 or 33 <= t < 36 else []
     if case == 'contested':
-        match.ball[:2] = [-.21, sign*(.07+abs(offset))]
+        match.players[2][2].p['sim.direct_pursuit'] = True
     if case == 'rebound':
-        match.ball[:2] = [-1.35, row['keeper_y']]
-        match.data.qvel[match.ball_qvel:match.ball_qvel+2] = [-1.35, sign*.04]
+        match.players[1][2].p['sim.keeper_intercept'] = True
     return match
 
 
 def run(row, directory, profile, visible=False):
     match = setup(row, profile)
+    start_ball = list(match.ball[:2])
+    start_velocity = list(match.data.qvel[match.ball_qvel:match.ball_qvel+2])
+    if any(start_ball) or any(start_velocity):
+        raise ValueError("Kickoff requires a stationary ball at midfield")
     result = asyncio.run(match.run(75., visible, title=f"Match {row['number']}/100 | {row['case']} | {row['side']}"))
     if result == "closed":
         raise SystemExit("Viewer closed before final whistle")
@@ -84,7 +83,7 @@ def run(row, directory, profile, visible=False):
         for sample in match.trace:
             out.write(json.dumps(sample)+'\n')
     mouth = match.players[0][2].specs[1 - match.players[0][2].p['match.own_goal']]
-    doc = dict(row, result=result, seconds=match.data.time, events=match.events,
+    doc = dict(row, start_ball_xy=start_ball, start_ball_velocity_xy=start_velocity, result=result, seconds=match.data.time, events=match.events,
                blue_inner_width_m=mouth['width'], blue_centre_y_m=mouth['y'],
                ball_radius_m=float(match.model.geom_size[match.ball_geom, 0]))
     tmp = directory/f'match-{name}.tmp'
