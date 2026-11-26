@@ -154,11 +154,14 @@ class MatchAdapter(sim.GameAdapter):
 
 
 class Match:
-    def __init__(self, *, side=None, keeper_y=0., start_y=0., yaw_offset=0., parameters=None, record=False, imu_seed=0, entry="center", spectators=False):
+    def __init__(self, *, side=None, keeper_y=0., start_y=0., yaw_offset=0., parameters=None, record=False, imu_seed=0, entry="center", spectators=False, shared=None, visitor_kickoff=False, elapsed=0.):
         self.settings = sim.load_settings(sim.SETTINGS)
-        self.model = match_model(spectators)
+        self.model = shared[0] if shared else match_model(spectators)
         sim.apply_settings(self.model, self.settings)
-        self.data = mujoco.MjData(self.model)
+        self.data = shared[1] if shared else mujoco.MjData(self.model)
+        if shared:
+            mujoco.mj_resetData(self.model, self.data)
+        self.elapsed = elapsed
         self.spectators = spectator_ids(self.model) if spectators else []
         move_spectators(self.data, self.spectators, self.settings["layout"], 0.)
         self.ball_geom = self.model.geom("ball").id
@@ -204,14 +207,18 @@ class Match:
             xy, yaw = (pose.x, pose.y), pose.yaw
         self.restart_xy = tuple(self.ball[:2])
         self.ball_movement_logged = False
+        if visitor_kickoff:
+            mirror = (-xy[0], -xy[1])
+            defending, _ = opposing_start(xy, yaw)
+            xy = (-defending[0], -defending[1])
         self.players = []
         self.events = []
         self.contact_roots = {}
         self.last_touch = {}
         for prefix, start, rotation, role, delay, own in (
-            ("", xy, [math.cos(yaw/2),0.,0.,math.sin(yaw/2)], sim.SimpleFootball, 0., 0),
+            ("", xy, [math.cos(yaw/2),0.,0.,math.sin(yaw/2)], sim.SimpleFootball, 30. if visitor_kickoff else 0., 0),
             ("keeper_", (blue-.10*facing, keeper_y), quat, SimpleGoalkeeper, 0., 1),
-            ("visitor_", mirror, quat, sim.SimpleFootball, 30., 1),
+            ("visitor_", mirror, quat, sim.SimpleFootball, 0. if visitor_kickoff else 30., 1),
             ("ally_keeper_", (yellow+.10*facing, 0.), [0.,0.,0.,1.] if facing < 0 else [1.,0.,0.,0.], SimpleGoalkeeper, 0., 0),
         ):
             params = p | {"match.own_goal": own}
@@ -367,9 +374,9 @@ class Match:
                             [world.x, world.y], float(np.linalg.norm(self.ball-ball_before))))
         tasks[0] = asyncio.create_task(self.player(*self.players[0]))
 
-    async def run(self, seconds, visible, *, pickup_at=None, reentry='neutral', title='Match'):
+    async def run(self, seconds, visible, *, pickup_at=None, reentry='neutral', title='Match', viewer=None):
         self.restart_xy = tuple(self.ball[:2])
-        window = mujoco.viewer.launch_passive(self.model, self.data) if visible else None
+        window = viewer or (mujoco.viewer.launch_passive(self.model, self.data) if visible else None)
         if window:
             window.cam.lookat[:] = [0., 0., .12]
             window.cam.distance, window.cam.elevation, window.cam.azimuth = 4.5,-35,90
@@ -407,7 +414,7 @@ class Match:
                         if task.done() and not task.cancelled():
                             task.result()
                     if window:
-                        window.set_texts((None, None, f"{title} | {self.data.time:.1f}s",
+                        window.set_texts((None, None, f"{title} | {self.elapsed + self.data.time:.1f}s",
                                           " | ".join(g.info["phase"] for _,g,_,d in self.players)))
                         window.sync()
                         time.sleep(max(0., .02-(time.perf_counter()-before)))
@@ -418,7 +425,7 @@ class Match:
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
-            if window:
+            if window and viewer is None:
                 window.close()
             self.renderer.close()
 

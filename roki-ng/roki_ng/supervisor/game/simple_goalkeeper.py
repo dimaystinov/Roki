@@ -23,6 +23,46 @@ class SimpleGoalkeeper(SimpleFootball):
         self.move_ball = None
         self.motion_changed = False
         self.track_deadline = 0.
+        self.search_view = 0
+        self.last_close_pan = None
+        self.ball_side = -1
+
+    async def find_near_ball(self, revision):
+        # y is positive to body-left. The servo sign belongs to the camera mount.
+        sign = self.g.s.params.backend.Robot.camera.pan_sign
+        poses = ((self.ball_side*1500, -1900), (-self.ball_side*1500, -1900),
+                 (0, -2100), (self.ball_side*1950, -950), (-self.ball_side*1950, -950))
+        pan, tilt = poses[self.search_view % len(poses)]
+        self.search_view += 1
+        self.describe('keeper_ball_search', 'look along goal line and beside feet')
+        scene = await self.look(round(pan/sign), tilt, wait_ball=True)
+        return scene if self.g._same_plan(revision) else None
+
+    async def clear_at_foot(self, scene, ball, yaw):
+        if not scene.get('confirmed') or time.monotonic()-scene['received'] > .5:
+            return False
+        x, y = ball
+        leg = 'right' if y < 0 else 'left'
+        toe = self.p.get(f'game.soft_kick.{leg}.toe_x_mm', 0.)/1000
+        # The simulated feet are mirror images and share the measured toe length.
+        if leg == 'left' and not toe:
+            toe = self.p.get('game.soft_kick.right.toe_x_mm', 0.)/1000
+        gap = x-self.p['game.ball_diameter_m']/2-toe
+        offset = self.p['game.kick_offset_mm']/1000
+        if toe <= 0 or not -.01 <= gap <= .04 or abs(abs(y)-offset) > .027:
+            return False
+        # The keeper restores its starting heading before calling this method.
+        odom = getattr(self.g, 'odometry', None)
+        if odom and odom.confidence != 'degraded':
+            enemy = self.specs[1-self.p['match.own_goal']]
+            gx, gy = odom.body_point((enemy['x'], enemy['y']))
+            if abs(math.atan2(gy-y, gx-x)) > math.radians(30):
+                return False
+        elif abs(wrap(self.heading-yaw)) > math.radians(12):
+            return False
+        self.describe('keeper_clear', f'clear toward opponent end with {leg} foot')
+        await self.move('motion.kick', dict(leg=leg, power=80, offset=0))
+        return True
 
     async def block_incoming(self, scene, revision):
         """Predict a crossing at the keeper's feet from two stationary camera frames."""
@@ -113,11 +153,27 @@ class SimpleGoalkeeper(SimpleFootball):
             return
         self.observe_motion_ball(observed)
         # Look down first: a close or moving ball has priority over a goal scan.
-        scene = await self.look(0, self.p['game.head_tilt'])
+        if self.p.get('sim.keeper_intercept') and self.last_close_pan is not None:
+            scene = await self.look(self.last_close_pan, -1850, wait_ball=True)
+            self.last_close_pan = None
+        else:
+            scene = await self.look(0, self.p['game.head_tilt'])
         if not self.g._same_plan(revision):
             return
         ball = scene.get('ball') if scene else None
         if self.p.get('sim.keeper_intercept'):
+            if ball is None:
+                scene = await self.find_near_ball(revision)
+                if not self.g._same_plan(revision):
+                    return
+                ball = (scene or {}).get('ball')
+            if ball:
+                self.ball_side = 1 if ball[1] > 0 else -1
+                self.search_view = 0
+                if math.hypot(*ball) < .48 and abs(ball[1]) > .07:
+                    bearing = math.atan2(ball[1], ball[0])
+                    tick = .00058909*self.g.s.params.backend.Robot.camera.pan_sign
+                    self.last_close_pan = max(-2450, min(2450, round(bearing/tick)))
             if await self.block_incoming(scene, revision) or not self.g._same_plan(revision):
                 return
         urgent = ball is not None and (math.hypot(*ball) < .7 or self.ball_speed > .15)
@@ -160,6 +216,8 @@ class SimpleGoalkeeper(SimpleFootball):
             await self.turn(max(-.35, min(.35, error)))
             return
         if self.p.get('sim.keeper_intercept'):
+            if ball and await self.clear_at_foot(scene, ball, yaw):
+                return
             odom = getattr(self.g, 'odometry', None)
             if odom and odom.confidence != 'degraded':
                 home_x, home_y = odom.body_point((odom.home_x, odom.home_y))
@@ -172,6 +230,16 @@ class SimpleGoalkeeper(SimpleFootball):
                     return
                 if fresh:
                     x, y = ball
+                    if 0. < x < .32 and abs(y) < .40:
+                        toe = self.p.get('game.soft_kick.right.toe_x_mm', 0.)/1000
+                        target_x = toe + self.p['game.ball_diameter_m']/2 + .015
+                        dx = max(-.06, min(x-target_x, .25-depth))
+                        dy = y-math.copysign(self.p['game.kick_offset_mm']/1000, y)
+                        _, field_y = odom.field_point((dx, dy))
+                        if toe > 0 and abs(field_y-own['y']) < own['width']/2-.07 and math.hypot(dx,dy) > .025:
+                            self.describe('keeper_clear_setup', 'align near foot for clearance')
+                            await self.walk(min(.10, math.hypot(dx,dy)), math.atan2(dy,dx))
+                            return
                     step = min(.10, .25-depth, x-.10)
                     _, field_y = odom.field_point(ball)
                     if (.17 < x < .68 and step > .025 and abs(y) < .23

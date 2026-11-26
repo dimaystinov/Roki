@@ -397,7 +397,7 @@ class GameAdapter:
         mounted = np.empty(4)
         mujoco.mju_mulQuat(mounted, self.world.data.qpos[3:7], [.5, .5, .5, .5])
         mujoco.mju_mulQuat(sensor, [mount, 0., 0., -mount], mounted)
-        elapsed = self.world.data.time
+        elapsed = self.world.data.time + getattr(getattr(self.world, "match", None), "elapsed", 0.)
         block, index = divmod(round(elapsed * 50), 1024)
         if block != self.imu_noise_block:
             rng = np.random.default_rng([self.imu_seed, block])

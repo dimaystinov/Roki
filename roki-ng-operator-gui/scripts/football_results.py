@@ -75,7 +75,9 @@ def metrics(match, trace):
     if crossings and 'blue_inner_width_m' in match:
         clearance = round(1000*(match['blue_inner_width_m']/2 - match['ball_radius_m']
                                   - abs(crossings[-1]-match['blue_centre_y_m'])))
-    return dict(blue_keeper_max_depth_cm=None if max_keeper_depth is None else round(max_keeper_depth*100,1),
+    score = match.get('score', {})
+    return dict(our_goals=score.get('goal_blue', int(outcome=='goal_blue')),
+                their_goals=score.get('goal_yellow', int(outcome=='goal_yellow')), blue_keeper_max_depth_cm=None if max_keeper_depth is None else round(max_keeper_depth*100,1),
                 min_range_cm=round(100*minimum_range,1), final_range_cm=round(100*final_range,1),
                 keeper_touches_after_home_shot=saves, blue_goal_clearance_mm=clearance,
                 keeper_splits=sum(e[2] == 'motion.splits' for e in events),
@@ -114,7 +116,7 @@ def generate(directory):
         writer.writerows(entries.values())
     paired = [r for n,r in entries.items() if ((n-1)^1)+1 in entries]
     lines = ['# Турнир simple_football', '', f'Завершено {len(entries)} из {len(manifest)} эпизодов. Полных пар {len(paired)//2}. В таблице учитываются только полные пары.',
-             '', '| Серия | Версия | Игр | Победы | 0:0 | Поражения | Очки | Игр с атакующим ударом | Повторные удары после контакта соперника |',
+             '', '| Серия | Версия | Игр | Победы | Ничьи | Поражения | Очки | Игр с атакующим ударом | Повторные удары после контакта соперника |',
              '|---|---|---:|---:|---:|---:|---:|---:|---:|']
     ratings = {}
     for split in ('selection','holdout'):
@@ -138,11 +140,11 @@ def generate(directory):
     lines += ['','[Матрица сценариев](manifest.json) · [Измерения по каждому матчу](metrics.csv) · [Протокол и критерии](PLAN.md)',
               '', 'Команды включают слабые стартовые удары. Атакующий удар требует контакта активной стопы при сильном ударе. Повторный удар требует новой команды и контакта соперника после предыдущего удара. Начальный наброс в сценарии rebound сам по себе в эту статистику не входит.']
     lines += ['', '## Разбор каждого матча', '',
-              '| Матч | Исход | Команды удара | Сильные удары с контактом | Самая долгая фаза | Что проверить |',
-              '|---:|---|---:|---:|---|---|']
+              '| Матч | Исход | Наши голы | Голы соперника | Команды удара | Сильные удары с контактом | Самая долгая фаза | Что проверить |',
+              '|---:|---|---:|---:|---:|---:|---|---|']
     for r in entries.values():
         lines.append('| ' + ' | '.join(str(r[k]) for k in
-                     ('number','result','shot_commands','distinct_shots','dominant_phase','review')) + ' |')
+                     ('number','result','our_goals','their_goals','shot_commands','distinct_shots','dominant_phase','review')) + ' |')
     (directory/'REPORT.md').write_text('\n'.join(lines)+'\n')
 
 

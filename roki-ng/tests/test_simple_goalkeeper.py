@@ -166,6 +166,8 @@ def test_trial_keeper_closes_then_returns_on_loss(tmp_path):
     k, game = keeper(tmp_path, ball=(.48, .08))
     k.p['sim.keeper_intercept'] = True
     odom = game.odometry = GameOdometry(k.p, 'goalkeeper', 0.)
+    from roki_ng.body.motion.backends.roki2 import backend
+    game.s.params = SimpleNamespace(backend=backend)
     game._settle = AsyncMock(return_value=True)
     k.walk = AsyncMock()
     k.look.return_value.update(confirmed=True)
@@ -195,3 +197,23 @@ def test_keeper_split_reads_incoming_direction(tmp_path, point, blocks):
     assert asyncio.run(k.block_incoming(first, 1)) is blocks
     assert [call.args[0] for call in k.move.await_args_list] == (
         ['motion.splits', 'motion.pose'] if blocks else [])
+
+
+@pytest.mark.parametrize('side,leg', [(-1,'right'), (1,'left')])
+def test_keeper_finds_ball_at_side_and_clears(tmp_path, side, leg):
+    from roki_ng.body.motion.backends.roki2 import backend
+
+    k, g = keeper(tmp_path)
+    g.s.params = SimpleNamespace(backend=backend)
+    k.ball_side = side
+    k.p['game.soft_kick.right.toe_x_mm'] = 50.
+    ball = (.11, side*k.p['game.kick_offset_mm']/1000)
+    k.look.return_value = dict(ball=ball, confirmed=True, received=time.monotonic())
+    scene = asyncio.run(k.find_near_ball(1))
+    pan, tilt = k.look.await_args.args
+    assert pan*backend.Robot.camera.pan_sign*side > 0 and tilt < -1500
+    k.heading = 0.
+    k.move = AsyncMock(return_value=True)
+    assert asyncio.run(k.clear_at_foot(scene, ball, 0.))
+    assert k.move.await_args.args == ('motion.kick', dict(leg=leg,power=80,offset=0))
+    assert not asyncio.run(k.clear_at_foot(scene, (.36,ball[1]), 0.))
