@@ -27,6 +27,11 @@ def metrics(match, trace):
         elif action in ('touch', 'shot_contact') and kicks in contacts and last_blocked != kicks:
             last_blocked = kicks
             blocks += 1
+    saves = sum(
+        any(shot[1:3] == ['home', 'shot_contact'] and 0 < e[0]-shot[0] < 1.5
+            for shot in events[:i]) for i, e in enumerate(events) if e[1:3] == ['keeper','touch'])
+    minimum_range = float('inf')
+    final_range = None
     errors = []
     phase_counts = {}
     flank_samples = intercept_samples = 0
@@ -37,6 +42,8 @@ def metrics(match, trace):
         intercept_samples += sum(players.get(role, {}).get('phase') == 'keeper_intercept'
                                  for role in ('keeper', 'ally_keeper'))
         home = players['home']
+        final_range = math.dist(sample['ball'][:2], home['actual'][:2])
+        minimum_range = min(minimum_range, final_range)
         phase = home['phase'] or 'initial'
         phase_counts[phase] = phase_counts.get(phase, 0) + 1
         pose = home['estimate']
@@ -48,10 +55,14 @@ def metrics(match, trace):
         review = 'Сохранить розыгрыш для регрессии и воспроизвести на другой стороне.'
     elif outcome == 'goal_yellow':
         review = 'Сверить последний контакт соперника и позицию своего вратаря перед голом.'
+    elif saves:
+        review = f'Вратарь коснулся мяча вскоре после удара ({saves}). Проверить свободный угол и добивание.'
     elif contacts:
         review = 'Сравнить направление мяча после контакта с положением ворот и вратаря.'
     elif 'search' in dominant:
         review = 'Проверить последнюю детекцию и направление поиска после потери мяча.'
+    elif minimum_range < .18:
+        review = f'Ближайшее расстояние центр–центр {minimum_range:.2f} м. Проверить выбор стопы и последнее уточнение курса.'
     else:
         review = f'Проверить переход из {dominant} к ударной позиции.'
     crossings = [e[3][1] for e in events if e[1:3] == ['referee', 'goal_blue']]
@@ -59,7 +70,8 @@ def metrics(match, trace):
     if crossings and 'blue_inner_width_m' in match:
         clearance = round(1000*(match['blue_inner_width_m']/2 - match['ball_radius_m']
                                   - abs(crossings[-1]-match['blue_centre_y_m'])))
-    return dict(blue_goal_clearance_mm=clearance,
+    return dict(min_range_cm=round(100*minimum_range,1), final_range_cm=round(100*final_range,1),
+                keeper_touches_after_home_shot=saves, blue_goal_clearance_mm=clearance,
                 keeper_splits=sum(e[2] == 'motion.splits' for e in events),
                 visitor_flank_samples=flank_samples, keeper_intercept_samples=intercept_samples, dominant_phase=dominant, review=review, number=match['number'], case=match.get('case'), side=match['side'], split=match.get('split'),
                 policy='B' if match.get('quick') else 'A', result=outcome,
