@@ -84,7 +84,7 @@ def run(row, directory, profile, visible=False):
             out.write(json.dumps(sample)+'\n')
     mouth = match.players[0][2].specs[1 - match.players[0][2].p['match.own_goal']]
     doc = dict(row, start_ball_xy=start_ball, start_ball_velocity_xy=start_velocity, result=result, seconds=match.data.time, events=match.events,
-               blue_inner_width_m=mouth['width'], blue_centre_y_m=mouth['y'],
+               blue_goal_x_m=mouth['x'], blue_inner_width_m=mouth['width'], blue_centre_y_m=mouth['y'],
                ball_radius_m=float(match.model.geom_size[match.ball_geom, 0]))
     tmp = directory/f'match-{name}.tmp'
     tmp.write_text(json.dumps(doc, indent=2)+'\n')

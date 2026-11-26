@@ -30,6 +30,7 @@ def metrics(match, trace):
     saves = sum(
         any(shot[1:3] == ['home', 'shot_contact'] and 0 < e[0]-shot[0] < 1.5
             for shot in events[:i]) for i, e in enumerate(events) if e[1:3] == ['keeper','touch'])
+    max_keeper_depth = None
     minimum_range = float('inf')
     final_range = None
     errors = []
@@ -41,6 +42,10 @@ def metrics(match, trace):
         flank_samples += players.get('visitor', {}).get('phase') == 'simple_flank_walk'
         intercept_samples += sum(players.get(role, {}).get('phase') == 'keeper_intercept'
                                  for role in ('keeper', 'ally_keeper'))
+        if match.get('blue_goal_x_m') and 'keeper' in players:
+            line = match['blue_goal_x_m']
+            depth = (players['keeper']['actual'][0]-line)*-math.copysign(1., line)
+            max_keeper_depth = depth if max_keeper_depth is None else max(depth, max_keeper_depth)
         home = players['home']
         final_range = math.dist(sample['ball'][:2], home['actual'][:2])
         minimum_range = min(minimum_range, final_range)
@@ -70,7 +75,8 @@ def metrics(match, trace):
     if crossings and 'blue_inner_width_m' in match:
         clearance = round(1000*(match['blue_inner_width_m']/2 - match['ball_radius_m']
                                   - abs(crossings[-1]-match['blue_centre_y_m'])))
-    return dict(min_range_cm=round(100*minimum_range,1), final_range_cm=round(100*final_range,1),
+    return dict(blue_keeper_max_depth_cm=None if max_keeper_depth is None else round(max_keeper_depth*100,1),
+                min_range_cm=round(100*minimum_range,1), final_range_cm=round(100*final_range,1),
                 keeper_touches_after_home_shot=saves, blue_goal_clearance_mm=clearance,
                 keeper_splits=sum(e[2] == 'motion.splits' for e in events),
                 visitor_flank_samples=flank_samples, keeper_intercept_samples=intercept_samples, dominant_phase=dominant, review=review, number=match['number'], case=match.get('case'), side=match['side'], split=match.get('split'),
