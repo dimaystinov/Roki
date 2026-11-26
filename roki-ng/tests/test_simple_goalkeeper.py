@@ -158,3 +158,24 @@ def test_keeper_walks_laterally_to_cover_visible_offset(tmp_path, offset):
     assert op == 'game.walk'
     assert args['distance_m'] == pytest.approx(.12)
     assert args['course'] == pytest.approx(math.copysign(math.pi/2, offset))
+
+
+def test_trial_keeper_closes_then_returns_on_loss(tmp_path):
+    from roki_ng.body.motion.odometry import GameOdometry
+
+    k, game = keeper(tmp_path, ball=(.48, .08))
+    k.p['sim.keeper_intercept'] = True
+    odom = game.odometry = GameOdometry(k.p, 'goalkeeper', 0.)
+    k.walk = AsyncMock()
+    k.look.return_value.update(confirmed=True)
+    asyncio.run(k.step())
+    distance, course = k.walk.await_args.args
+    assert 0 < distance <= .14
+    assert 0 < course < .3
+
+    odom.x, odom.y = odom.field_point((.18, 0.))
+    k.look.return_value.update(ball=None)
+    asyncio.run(k.step())
+    distance, course = k.walk.await_args.args
+    assert 0 < distance <= .16
+    assert abs(course) == pytest.approx(3.14159)
