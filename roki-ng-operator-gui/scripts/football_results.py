@@ -27,6 +27,8 @@ def metrics(match, trace):
         elif action in ('touch', 'shot_contact') and kicks in contacts and last_blocked != kicks:
             last_blocked = kicks
             blocks += 1
+    keeper_clear_commands = sum(e[1] in ('keeper','ally_keeper') and e[2]=='motion.kick' for e in events)
+    keeper_strikes = sum(e[1] in ('keeper','ally_keeper') and e[2]=='shot_contact' for e in events)
     saves = sum(
         any(shot[1:3] == ['home', 'shot_contact'] and 0 < e[0]-shot[0] < 1.5
             for shot in events[:i]) for i, e in enumerate(events) if e[1:3] == ['keeper','touch'])
@@ -74,9 +76,9 @@ def metrics(match, trace):
     clearance = None
     if crossings and 'blue_inner_width_m' in match:
         clearance = round(1000*(match['blue_inner_width_m']/2 - match['ball_radius_m']
-                                  - abs(crossings[-1]-match['blue_centre_y_m'])))
+                                  - max(abs(y-match['blue_centre_y_m']) for y in crossings)))
     score = match.get('score', {})
-    return dict(our_goals=score.get('goal_blue', int(outcome=='goal_blue')),
+    return dict(keeper_clear_commands=keeper_clear_commands, keeper_strike_contacts=keeper_strikes, our_goals=score.get('goal_blue', int(outcome=='goal_blue')),
                 their_goals=score.get('goal_yellow', int(outcome=='goal_yellow')), blue_keeper_max_depth_cm=None if max_keeper_depth is None else round(max_keeper_depth*100,1),
                 min_range_cm=round(100*minimum_range,1), final_range_cm=round(100*final_range,1),
                 keeper_touches_after_home_shot=saves, blue_goal_clearance_mm=clearance,

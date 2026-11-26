@@ -94,6 +94,7 @@ def run(row, directory, profile, visible=False):
             if outcome == 'time':
                 break
             score[outcome] += 1
+            print(f"GOAL {elapsed:.3f}s red {score['goal_blue']} : {score['goal_yellow']} blue", flush=True)
             if elapsed < 300.-1e-6:
                 with viewer.lock() if viewer else nullcontext():
                     match = setup(row, profile, shared=shared, visitor_kickoff=outcome=='goal_blue', elapsed=elapsed)
