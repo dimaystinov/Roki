@@ -1,0 +1,174 @@
+[
+  {
+    "title": "Правая · слабый",
+    "effective_rect": [
+      120,
+      140,
+      32,
+      87
+    ],
+    "reference": [
+      130,
+      62
+    ],
+    "reference_range": 144,
+    "reference_roll": 496,
+    "effective_count": 95,
+    "attempts": 342,
+    "stable": 106,
+    "fallen": 235,
+    "rect": [
+      120,
+      140,
+      32,
+      92
+    ],
+    "visual_bounds": {
+      "range_mm": [
+        124,
+        168
+      ],
+      "x_mm": [
+        119,
+        140
+      ],
+      "y_mm": [
+        -93,
+        -32
+      ]
+    },
+    "travel": [
+      3,
+      542
+    ]
+  },
+  {
+    "title": "Правая · сильный",
+    "effective_rect": [
+      100,
+      145,
+      32,
+      97
+    ],
+    "reference": [
+      120,
+      67
+    ],
+    "reference_range": 137,
+    "reference_roll": 3012,
+    "effective_count": 194,
+    "attempts": 342,
+    "stable": 305,
+    "fallen": 37,
+    "rect": [
+      85,
+      160,
+      17,
+      97
+    ],
+    "visual_bounds": {
+      "range_mm": [
+        91,
+        188
+      ],
+      "x_mm": [
+        89,
+        160
+      ],
+      "y_mm": [
+        -98,
+        -17
+      ]
+    },
+    "travel": [
+      7,
+      3561
+    ]
+  },
+  {
+    "title": "Левая · слабый",
+    "effective_rect": [
+      105,
+      140,
+      12,
+      92
+    ],
+    "reference": [
+      125,
+      52
+    ],
+    "reference_range": 136,
+    "reference_roll": 523,
+    "effective_count": 178,
+    "attempts": 342,
+    "stable": 209,
+    "fallen": 133,
+    "rect": [
+      105,
+      140,
+      12,
+      97
+    ],
+    "visual_bounds": {
+      "range_mm": [
+        105,
+        171
+      ],
+      "x_mm": [
+        104,
+        140
+      ],
+      "y_mm": [
+        13,
+        99
+      ]
+    },
+    "travel": [
+      2,
+      551
+    ]
+  },
+  {
+    "title": "Левая · сильный",
+    "effective_rect": [
+      105,
+      140,
+      22,
+      97
+    ],
+    "reference": [
+      125,
+      57
+    ],
+    "reference_range": 138,
+    "reference_roll": 3011,
+    "effective_count": 181,
+    "attempts": 342,
+    "stable": 319,
+    "fallen": 22,
+    "rect": [
+      105,
+      160,
+      27,
+      97
+    ],
+    "visual_bounds": {
+      "range_mm": [
+        108,
+        188
+      ],
+      "x_mm": [
+        104,
+        160
+      ],
+      "y_mm": [
+        28,
+        99
+      ]
+    },
+    "travel": [
+      32,
+      3525
+    ]
+  }
+]

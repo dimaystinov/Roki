@@ -1,0 +1,20 @@
+name: fpv-roki-build
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.11
+  - pyside6=6.7.*
+  - qt6-main=6.7.*
+  - pygobject
+  - gstreamer
+  - gst-plugins-base
+  - gst-plugins-good
+  - gst-plugins-bad
+  - gst-plugins-ugly
+  - gst-libav
+  - msgpack-python
+  - numpy
+  - cmake
+  - ninja
+  - pyinstaller=6.*

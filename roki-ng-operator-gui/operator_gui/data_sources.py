@@ -1,0 +1,295 @@
+"""Read-only datastream inspector with one automatic body.power subscription."""
+
+import json
+import math
+import time
+
+from PySide6.QtCore import QObject, Property, QTimer, Qt, Signal, Slot
+
+from .models import Rows
+
+
+def fields(value):
+    result = []
+
+    def visit(path, node, depth):
+        if len(result) >= 256:
+            return
+        if depth < 6 and isinstance(node, (dict, list)) and node:
+            items = node.items() if isinstance(node, dict) else enumerate(node)
+            for key, child in items:
+                if isinstance(node, list) and path.endswith("rpy_rad") and len(node) == 3:
+                    key = ("roll", "pitch", "yaw")[key]
+                visit(f"{path}.{key}" if path else str(key), child, depth + 1)
+        else:
+            text = ("да" if node else "нет") if type(node) is bool else "нет данных" if node is None else (
+                json.dumps(node, ensure_ascii=False) if isinstance(node, (dict, list)) else str(node))
+            result.append({"name": path or "value", "value": text[:512]})
+    visit("", value, 0)
+    return result
+
+
+class DataSources(QObject):
+    changed = Signal()
+    topicsChanged = Signal()
+    sampleReceived = Signal(str, object)
+
+    def __init__(self, session, parent=None):
+        super().__init__(parent)
+        self.session = session
+        self.rows = Rows(self, limit=256)
+        self.topics = []
+        self.selected = ""
+        self.samples = {}
+        self.wanted = set()
+        self.active = {}
+        self.pending = set()
+        self.sequences = {}
+        self.gaps = {}
+        self.error = ""
+        self.power_error = ""
+        self.power_expiry = QTimer(self)
+        self.power_expiry.setSingleShot(True)
+        self.power_expiry.setTimerType(Qt.TimerType.PreciseTimer)
+        self.power_expiry.timeout.connect(self.changed.emit)
+        session.response.connect(self.response)
+        session.failed.connect(self.failed)
+        session.changed.connect(self.connection)
+        session.welcomed.connect(self.reset)
+        self.clock = QTimer(self)
+        self.clock.setInterval(1000)
+        self.clock.timeout.connect(self.changed.emit)
+        self.clock.start()
+
+    @Property("QVariantMap", notify=changed)
+    def power(self):
+        sample, received = self.samples.get("body.power", ({}, None))
+        data = sample.get("data", {})
+        age = sample.get("age_ms")
+        numeric = lambda value: type(value) in (int, float) and math.isfinite(value)
+        age = age + max(0., time.monotonic() - received) * 1000 if (
+            numeric(age) and age >= 0 and received is not None) else None
+        voltage = data.get("voltage_v")
+        stale = age is not None and age >= 3000
+        valid = (self.session.connected and sample.get("valid") is True
+                 and data.get("valid") is not False and not data.get("error")
+                 and numeric(voltage) and voltage >= 0 and age is not None and not stale)
+        simulated = data.get("simulated") is True
+        text = (f"{voltage:.2f} В" if valid else "нет связи" if not self.session.connected
+                else "данные устарели" if stale else "нет данных")
+        if simulated:
+            text += " (симуляция)"
+        raw = data.get("adc_raw")
+        if type(raw) is not int or not 0 <= raw <= 65535:
+            raw = None
+        details = ("Напряжение, не процент заряда.\n"
+                   f"ADC: {raw if raw is not None else 'нет данных'}\n"
+                   f"Возраст: {round(age) if age is not None else 'неизвестен'} мс")
+        error = data.get("error") or self.power_error
+        if error:
+            details += "\n" + str(error)
+        if "body.power" not in self.wanted:
+            details += "\nПодписка отключена; включается в «Источниках данных»."
+        return dict(text=text, valid=valid, stale=stale, simulated=simulated,
+                    voltage=voltage if valid else None, adcRaw=raw, ageMs=age, details=details)
+
+    def subscribe_power(self):
+        if self.session.connected:
+            self.wanted.add("body.power")
+            self.request("data.subscribe", {"topic": "body.power", "rate_hz": 1}, "body.power")
+
+    @Property("QVariantList", notify=topicsChanged)
+    def catalog(self):
+        return self.topics
+
+    @Property("QVariantMap", notify=changed)
+    def view(self):
+        sample, received = self.samples.get(self.selected, ({}, None))
+        meta = next((m for m in self.topics if m["name"] == self.selected), {})
+        return dict(selected=self.selected, connected=self.session.connected,
+                    busy=any(topic == self.selected for _, topic in self.pending),
+                    listing=("data.list", "") in self.pending,
+                    watching=self.selected in self.wanted, active=self.selected in self.active,
+                    subscriptions=len(self.wanted), maxRate=meta.get("max_rate_hz", 10),
+                    received=received is not None, valid=sample.get("valid", False),
+                    localAge="-" if received is None else str(round(time.monotonic() - received, 1)),
+                    sourceAge=str(sample.get("age_ms", "-")), gaps=self.gaps.get(self.selected, 0),
+                    rate=self.active.get(self.selected, 0), error=self.error,
+                    raw=json.dumps(sample, ensure_ascii=False, indent=2) if sample else "")
+
+    def request(self, op, body, topic=""):
+        key = (op, topic)
+        if not self.session.connected or key in self.pending:
+            return
+        self.pending.add(key)
+        self.error = ""
+        if topic == "body.power":
+            self.power_error = ""
+        self.session.request(op, body, topic)
+        self.changed.emit()
+
+    @Slot()
+    def requestList(self):
+        self.request("data.list", {})
+
+    @Slot(str)
+    def select(self, topic):
+        if topic and topic not in {m["name"] for m in self.topics}:
+            return
+        self.selected = topic
+        self.rows.replace(fields(self.samples.get(topic, ({}, None))[0].get("data", {})) if topic in self.samples else [])
+        self.changed.emit()
+
+    @Slot()
+    def snapshot(self):
+        if self.selected:
+            self.request("data.snapshot", {"topic": self.selected}, self.selected)
+
+    @Slot(float)
+    def subscribe(self, rate):
+        self.subscribe_topic(self.selected, rate)
+
+    def subscribe_topic(self, topic, rate):
+        if not self.session.connected or not topic or any(t == topic for _, t in self.pending):
+            return
+        meta = next((m for m in self.topics if m["name"] == topic), {})
+        if not math.isfinite(rate) or not 0.2 <= rate <= meta.get("max_rate_hz", 10):
+            self.error = "Частота вне допустимого диапазона"
+            self.changed.emit()
+            return
+        if topic in self.wanted and self.active.get(topic) == rate:
+            return
+        self.wanted.add(topic)
+        self.sequences.pop(topic, None)
+        self.request("data.subscribe", {"topic": topic, "rate_hz": rate}, topic)
+
+    @Slot()
+    def unsubscribe(self):
+        self.unsubscribe_topic(self.selected)
+
+    def unsubscribe_topic(self, topic):
+        if topic in self.wanted and not any(t == topic for _, t in self.pending):
+            self.request("data.unsubscribe", {"subscription_id": topic}, topic)
+
+    @Slot(str, object, str)
+    def response(self, op, body, topic):
+        if topic.startswith("head-state:"):
+            return
+        if not op.startswith("data."):
+            return
+        self.pending.discard((op, topic))
+        try:
+            if op == "data.list":
+                items = body["items"]
+                if (not isinstance(items, list) or len(items) > 64
+                        or not all(isinstance(item, dict) and isinstance(item.get("name"), str)
+                                   and isinstance(item.get("max_rate_hz"), (int, float))
+                                   and math.isfinite(item["max_rate_hz"]) and 0.2 <= item["max_rate_hz"] <= 100
+                                   for item in items)):
+                    raise ValueError("Некорректный каталог источников")
+                self.topics = items
+                self.topicsChanged.emit()
+                self.select(self.selected if self.selected in {m["name"] for m in items}
+                            else items[0]["name"] if items else "")
+            elif op == "data.snapshot":
+                if body.get("topic") != topic:
+                    raise ValueError("Ответ относится к другому источнику")
+                self._sample(body)
+            elif op == "data.subscribe":
+                if body.get("subscription_id") != topic:
+                    raise ValueError("Ответ относится к другой подписке")
+                self.active[topic] = body["rate_hz"]
+                self.sequences.pop(topic, None)
+            elif op == "data.unsubscribe":
+                self.wanted.discard(topic)
+                self.active.pop(topic, None)
+        except (KeyError, TypeError, ValueError, AttributeError) as exc:
+            self.error = str(exc)
+        self.changed.emit()
+
+    def notification(self, body):
+        topic = body.get("topic")
+        if not isinstance(topic, str) or topic not in self.wanted or ("data.subscribe", topic) in self.pending:
+            return
+        sequence = body.get("sequence", 0)
+        if type(sequence) is not int or sequence <= self.sequences.get(topic, 0):
+            return
+        previous = self.sequences.get(topic, 0)
+        if previous:
+            self.gaps[topic] = self.gaps.get(topic, 0) + sequence - previous - 1
+        self.sequences[topic] = sequence
+        self._sample(body)
+        self.changed.emit()
+
+    def _sample(self, body):
+        topic = body.get("topic")
+        if (topic != "body.power" and topic not in self.wanted and topic not in {m["name"] for m in self.topics}) or not isinstance(body.get("data"), dict):
+            return
+        self.samples[topic] = (dict(body), time.monotonic())
+        if topic == "body.power":
+            self.power_expiry.stop()
+            age = body.get("age_ms")
+            if type(age) in (int, float) and math.isfinite(age) and 0 <= age < 3000:
+                self.power_expiry.start(max(1, math.ceil(3000 - age)))
+        if topic == self.selected:
+            self.rows.replace(fields(body["data"]))
+        self.sampleReceived.emit(topic, dict(body))
+
+    @Slot(str, str, str)
+    def failed(self, op, message, topic):
+        if topic.startswith("head-state:"):
+            return
+        if op.startswith("data."):
+            self.pending.discard((op, topic))
+            if op == "data.subscribe" and topic not in self.active:
+                self.wanted.discard(topic)
+            self.error = f"{op}: {message}"
+            if topic == "body.power":
+                self.power_error = self.error
+            self.changed.emit()
+
+    @Slot()
+    def connection(self):
+        if not self.session.connected:
+            self.power_expiry.stop()
+            self.samples.pop("body.power", None)
+            self.power_error = ""
+            self.wanted.clear()
+            self.active.clear()
+            self.pending.clear()
+        self.changed.emit()
+
+    @Slot(object)
+    def reset(self, _body):
+        self.topics = []
+        self.selected = ""
+        self.samples.clear()
+        self.wanted.clear()
+        self.active.clear()
+        self.pending.clear()
+        self.sequences.clear()
+        self.gaps.clear()
+        self.error = ""
+        self.power_error = ""
+        self.power_expiry.stop()
+        self.rows.replace([])
+        self.topicsChanged.emit()
+        self.changed.emit()
+
+        # Status telemetry only: no catalog request, lease, camera or IMU startup.
+        self.subscribe_power()
+
+    @Slot()
+    def barrier(self):
+        # Urgent motion commands retire queued normal requests. Keep subscription
+        # intent so an uncertain subscribe can still be explicitly unsubscribed.
+        restore_power = ("data.subscribe", "body.power") in self.pending
+        self.pending.clear()
+        self.changed.emit()
+        if restore_power:
+            # Queue after the urgent control command, not before interrupt().
+            QTimer.singleShot(0, self.subscribe_power)
+
+    def shutdown(self):
+        self.power_expiry.stop()
+        self.clock.stop()

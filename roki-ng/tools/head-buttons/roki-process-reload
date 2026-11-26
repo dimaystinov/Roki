@@ -1,0 +1,5 @@
+type = process
+command = /usr/bin/python /opt/roki-ng/tools/head-buttons/process_reload.py
+depends-on = local.target
+restart = true
+restart-delay = 1

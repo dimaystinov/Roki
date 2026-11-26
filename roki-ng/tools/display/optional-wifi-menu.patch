@@ -1,0 +1,67 @@
+diff --git a/roki_ng/supervisor/head_menu.py b/roki_ng/supervisor/head_menu.py
+index 444d0fe..204ecdd 100644
+--- a/roki_ng/supervisor/head_menu.py
++++ b/roki_ng/supervisor/head_menu.py
+@@ -5,6 +5,7 @@ from contextlib import suppress
+ from dataclasses import dataclass, field
+ 
+ from roki_ng.wire import Fault
++from .head_wifi import preview
+ 
+ 
+ @dataclass
+@@ -113,13 +114,20 @@ class HeadMenu:
+                 if self.job and (self.action is None or self.action.done()):
+                     self.action = asyncio.create_task(self._cancel())
+             return
++        if key == "right" and len(self.stack) == 1 and not self.pickup_mode:
++            self.action = asyncio.create_task(self._network_menu())
++            return
+         if key == "back":
++            if self.selected.op == 'menu.wifi':
++                preview(None)
+             if len(self.stack) > 1:
+                 self.stack.pop()
+             self.say(self.selected.label)
+         elif key in ("left", "right"):
+             node, index = self.stack[-1]
+             self.stack[-1][1] = (index + (1 if key == "right" else -1)) % len(node.children)
++            if self.selected.op == "menu.wifi":
++                preview(self.selected.label)
+             self.say(self.selected.label)
+         elif self.selected.children and self.selected.op is None:
+             self.stack.append([self.selected, 0])
+@@ -128,6 +136,19 @@ class HeadMenu:
+             self.cancel_requested = False
+             self.action = asyncio.create_task(self._start(self.selected))
+ 
++    async def _network_menu(self):
++        from .head_wifi import available
++        self.cancel_requested = False
++        items = [Item('Self', op='menu.wifi', args={'name': None})]
++        try:
++            items.extend(Item(name, op='menu.wifi', args={'name': name}) for name in await available())
++        except Exception as exc:
++            self.log('WARNING', f'Wi-Fi scan: {exc}')
++        if not self.cancel_requested:
++            self.stack.append([Item('Network', tuple(items)), 0])
++            preview('Self')
++            self.say('Self')
++
+     def hold(self, key):
+         """A hold is distinct from menu navigation; only an active game uses it."""
+         if key == 'back' and self.game_active and not self.finishing and not self.pickup_mode:
+@@ -157,6 +178,13 @@ class HeadMenu:
+     async def _start(self, item):
+         previous_game = self.game_active
+         try:
++            if item.op == 'menu.wifi':
++                from .head_wifi import choose
++                await choose(item.args['name'])
++                preview(None)
++                self.stack.pop()
++                self.say(item.label + ' ready')
++                return
+             if item.op == 'menu.own_goal':
+                 result = await self.command(item.op, dict(item.args))
+                 self.say('Own ' + result['colour'] + ' goal selected')

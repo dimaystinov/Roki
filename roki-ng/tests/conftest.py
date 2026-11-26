@@ -1,0 +1,27 @@
+"""Deterministic worker time without changing asyncio/IPC integration clocks."""
+import time
+from types import SimpleNamespace
+
+import pytest
+
+
+@pytest.fixture
+def body_clock(monkeypatch):
+    import roki_ng.body.runtime as body
+    import roki_ng.body.body_imu as body_imu
+    import roki_ng.body.power as body_power
+    import roki_ng.body.servos as body_servos
+    import roki_ng.body.communication.transports.motherboard as transport
+    now = [time.monotonic()]
+    clock = SimpleNamespace(monotonic=lambda: now[0],
+                            monotonic_ns=lambda: int(now[0] * 1e9))
+    for module in (body, body_imu, body_power, body_servos, transport):
+        monkeypatch.setattr(module, "time", clock)
+    original_tick = body.Body.tick
+
+    def tick(instance):
+        now[0] += 0.01
+        original_tick(instance)
+
+    monkeypatch.setattr(body.Body, "tick", tick)
+    return now

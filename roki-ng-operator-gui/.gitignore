@@ -1,0 +1,19 @@
+.deps/
+native/qml/**/*.qrc
+artifacts/
+__pycache__/
+*.pyc
+.venv/
+.env
+.env.*
+
+# Автономные дистрибутивы
+build/
+dist/
+sim/latest_trace.jsonl
+sim/fpv_profile/
+
+/sim/.robot-runtime/
+/sim/.local-state/
+
+/sim/.local-state-training-*/

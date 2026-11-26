@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "roki-ng"
+version = "0.1.0"
+description = "ROKI process-isolated manual runtime"
+requires-python = ">=3.11"
+dependencies = ["msgpack>=1.0"]
+
+[project.optional-dependencies]
+localisation = ["numpy>=2,<3", "opencv-python>=4.13,<6"]
+
+[project.scripts]
+roki-supervisor = "roki_ng.__main__:main"
+roki-client = "roki_ng.client:main"
+
+[tool.setuptools.packages.find]
+include = ["roki_ng*"]
+
+[tool.setuptools.package-data]
+roki_ng = ["assets/*.json"]
+"roki_ng.vision" = ["calibration_default/*.json", "calibration_default/*.npy"]
+"roki_ng.body.motion.backends.roki1" = ["*.json", "slots/*.json"]
+"roki_ng.body.motion.backends.roki2" = ["*.json", "slots/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

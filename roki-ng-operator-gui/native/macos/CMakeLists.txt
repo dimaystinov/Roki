@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.21)
+project(roki_docking_bootstrap LANGUAGES CXX)
+find_package(KDDockWidgets-qt6 REQUIRED)
+add_library(roki_docking_bootstrap SHARED bootstrap.cpp)
+set_target_properties(roki_docking_bootstrap PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+target_compile_features(roki_docking_bootstrap PRIVATE cxx_std_17)
+target_link_libraries(roki_docking_bootstrap PRIVATE KDAB::kddockwidgets)

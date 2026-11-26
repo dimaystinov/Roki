@@ -1,0 +1,28 @@
+--- a/roki-display.py
++++ b/roki-display.py
+@@ -294,7 +294,15 @@
+         self.closed = False
+ 
+     def render(self):
+-        key = (status_items_key(self.status_items), self.ssid, CUSTOM_TEXT, self.imu_status["state"], self.imu_status["unchanged_s"])
++        try:
++            with open('/run/roki-wifi-selection') as selection:
++                name = selection.read(64).strip()
++            readable = ''.join(c for c in name if c.isascii()).strip('_ ')
++            ssid_row = '> ' + (readable or name)
++        except FileNotFoundError:
++            ssid_row = self.ssid or ('Roki-Self' if any(
++                '192.168.73.1' in str(item) for item in self.status_items) else 'not connected')
++        key = (status_items_key(self.status_items), ssid_row, CUSTOM_TEXT, self.imu_status["state"], self.imu_status["unchanged_s"])
+         if key == self.status_key:
+             return
+         self.status_key = key
+@@ -332,7 +340,7 @@
+ 
+         if SHOW_WIFI_SSID and y + FONT_HEIGHT <= 240:
+             draw_text(image, 8, y, "SSID: ")
+-            draw_text(image, 56, y, text_fits(self.ssid or "not connected", 23))
++            draw_text(image, 56, y, text_fits(ssid_row, 23))
+ 
+         state = self.imu_status['state']
+         label, color = {

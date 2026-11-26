@@ -1,0 +1,46 @@
+<mujoco model="roki scene">
+
+  <include file="roki.xml"/>
+
+  <statistic center="0 0 0.55" extent="1.1"/>
+
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6"  ambient="0.3 0.3 0.3" specular="0 0 0"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+    <global azimuth="150" elevation="-20"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512"
+        height="3072"/>
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="0.2 0.3 0.4"
+        rgb2="0.1 0.2 0.3" markrgb="0.8 0.8 0.8" width="300" height="300"/>
+    <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5"
+        reflectance="0.2"/>
+
+    <texture type="2d" name="floor_texture_rubber" file="floor_textures/rubber.png"/>
+    <texture type="2d" name="floor_texture_carpet" file="floor_textures/carpet.png"/>
+    <texture type="2d" name="floor_texture_hard_mat" file="floor_textures/hard_mat.png"/>
+    <texture type="2d" name="floor_texture_linoleum" file="floor_textures/linoleum.png"/>
+    <texture type="2d" name="floor_texture_ice" file="floor_textures/ice.png"/>
+    <material name="floor_material_rubber" texture="floor_texture_rubber" texuniform="true" texrepeat="2 2" reflectance="0.2"/>
+    <material name="floor_material_carpet" texture="floor_texture_carpet" texuniform="true" texrepeat="2 2" reflectance="0.2"/>
+    <material name="floor_material_hard_mat" texture="floor_texture_hard_mat" texuniform="true" texrepeat="2 2" reflectance="0.2"/>
+    <material name="floor_material_linoleum" texture="floor_texture_linoleum" texuniform="true" texrepeat="2 2" reflectance="0.2"/>
+    <material name="floor_material_ice" texture="floor_texture_ice" texuniform="true" texrepeat="2 2" reflectance="0.2"/>
+  </asset>
+
+  <worldbody>
+    <light pos="0 0 3" dir="0 0 -1"  directional="false"/>
+    <geom name="floor" size="0 0 .125" type="plane" material="groundplane" conaffinity="15" condim="3"/>
+
+    <!-- Камеры от третьего лица для мультикамерного рендеринга -->
+    <!-- mode="trackcom" - камера движется вместе с центром масс, но ориентация стабильная (не трясётся) -->
+    <!-- Позиции указаны относительно центра масс робота -->
+    <camera name="camera_top" mode="trackcom" pos="0 0 1.5" xyaxes="1 0 0 0 1 0" fovy="50"/>
+    <camera name="camera_back" mode="trackcom" pos="0 -1.2 0.6" xyaxes="1 0 0 0 0.5 0.866" fovy="50"/>
+    <camera name="camera_front" mode="trackcom" pos="0 1.2 0.6" xyaxes="-1 0 0 0 0.5 0.866" fovy="50"/>
+    <camera name="camera_side" mode="trackcom" pos="-1.2 0 0.6" xyaxes="0 -1 0 0.5 0 0.866" fovy="50"/>
+  </worldbody>
+
+</mujoco>

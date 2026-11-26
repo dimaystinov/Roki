@@ -1,0 +1,36 @@
+name: FPV Roki Windows
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "roki-ng-operator-gui/**"
+      - ".github/workflows/fpv-windows.yml"
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          environment-file: roki-ng-operator-gui/packaging/windows-environment.yml
+          activate-environment: fpv-roki-build
+          auto-activate-base: false
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Build and test
+        shell: pwsh
+        working-directory: roki-ng-operator-gui
+        run: |
+          python -m pip install "mujoco>=3.3,<4" opencv-python-headless pytest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./packaging/build_windows.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FPV-Roki-windows-x64
+          path: roki-ng-operator-gui/dist/FPV-Roki-windows-x64.zip
+          if-no-files-found: error

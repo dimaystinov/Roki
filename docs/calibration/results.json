@@ -1,0 +1,582 @@
+[
+  {
+    "job_id": 1,
+    "test": "get_up_test",
+    "args": {
+      "fixture": "back",
+      "name": "get_up_test"
+    },
+    "dx_mm": 273,
+    "dy_mm": -86,
+    "yaw_deg": -0.8,
+    "path_mm": 492,
+    "upright": true,
+    "fallen": false,
+    "started_fallen": true,
+    "status": "completed",
+    "odometry": null,
+    "values": {},
+    "previous": {},
+    "start_x_mm": 0,
+    "start_y_mm": 0,
+    "pitch_deg": -0.03,
+    "pitch_min_deg": -89.68,
+    "pitch_max_deg": 79.89
+  },
+  {
+    "job_id": 2,
+    "test": "rotation_test",
+    "args": {
+      "name": "rotation_test"
+    },
+    "dx_mm": -11,
+    "dy_mm": 15,
+    "yaw_deg": -5.65,
+    "path_mm": 2521,
+    "upright": true,
+    "fallen": false,
+    "started_fallen": false,
+    "status": "completed",
+    "odometry": null,
+    "values": {
+      "motion.jump_yaw_cw": -0.16,
+      "motion.jump_yaw_ccw": 0.155,
+      "motion.rotation_yield_right": 0.288,
+      "motion.rotation_yield_left": 0.3
+    },
+    "previous": {
+      "motion.jump_yaw_cw": -0.166,
+      "motion.jump_yaw_ccw": 0.151,
+      "motion.rotation_yield_right": 0.289,
+      "motion.rotation_yield_left": 0.299
+    },
+    "start_x_mm": 0,
+    "start_y_mm": 0,
+    "pitch_deg": -0.86,
+    "pitch_min_deg": -3.66,
+    "pitch_max_deg": 4.18,
+    "verification_error_deg": 1.2
+  },
+  {
+    "job_id": 3,
+    "test": "run_test",
+    "args": {
+      "mode": "short",
+      "name": "run_test"
+    },
+    "dx_mm": 339,
+    "dy_mm": -3,
+    "yaw_deg": -3.83,
+    "path_mm": 835,
+    "upright": true,
+    "fallen": false,
+    "started_fallen": false,
+    "status": "completed",
+    "odometry": {
+      "dx_mm": 339,
+      "dy_mm": 1
+    },
+    "values": {
+      "motion.run_10_mm": 339,
+      "motion.run_10_command_mm": 237
+    },
+    "previous": {
+      "motion.run_10_mm": 338.718,
+      "motion.run_10_command_mm": 236.775
+    },
+    "start_x_mm": 0,
+    "start_y_mm": 0,
+    "pitch_deg": -0.6,
+    "pitch_min_deg": -3.69,
+    "pitch_max_deg": 2.7
+  },
+  {
+    "job_id": 4,
+    "test": "run_test",
+    "args": {
+      "mode": "long",
+      "name": "run_test"
+    },
+    "dx_mm": 649,
+    "dy_mm": -6,
+    "yaw_deg": -4.1,
+    "path_mm": 1538,
+    "upright": true,
+    "fallen": false,
+    "started_fallen": false,
+    "status": "completed",
+    "odometry": {
+      "dx_mm": 648,
+      "dy_mm": 0
+    },
+    "values": {
+      "motion.run_20_mm": 649,
+      "motion.run_20_command_mm": 452
+    },
+    "previous": {
+      "motion.run_20_mm": 648.934,
+      "motion.run_20_command_mm": 452.025
+    },
+    "start_x_mm": 0,
+    "start_y_mm": 0,
+    "pitch_deg": -0.6,
+    "pitch_min_deg": -3.69,
+    "pitch_max_deg": 2.71
+  },
+  {
+    "job_id": 5,
+    "test": "run_test",
+    "args": {
+      "mode": "spot",
+      "name": "run_test"
+    },
+    "dx_mm": 2,
+    "dy_mm": 1,
+    "yaw_deg": -1.13,
+    "path_mm": 1311,
+    "upright": true,
+    "fallen": false,
+    "started_fallen": false,
+    "status": "completed",
+    "odometry": null,
+    "values": {
+      "motion.shift_x_mm": 93,
+      "motion.shift_y_mm": -1
+    },
+    "previous": {
+      "motion.shift_x_mm": 91.216,
+      "motion.shift_y_mm": -2.464
+    },
+    "start_x_mm": 0,
+    "start_y_mm": 0,
+    "pitch_deg": -0.91,
+    "pitch_min_deg": -3.39,
+    "pitch_max_deg": 2.3
+  },
+  {
+    "job_id": 6,
+    "test": "run_test",
+    "args": {
+      "mode": "side_left",
+      "name": "run_test"
+    },
+    "dx_mm": 15,
+    "dy_mm": 766,
+    "yaw_deg": -1.49,
+    "path_mm": 1298,
+    "upright": true,
+    "fallen": false,
+    "started_fallen": false,
+    "status": "completed",
+    "odometry": null,
+    "values": {
+      "motion.side_left_20_mm": 766
+    },
+    "previous": {
+      "motion.side_left_20_mm": 763.787
+    },
+    "start_x_mm": 0,
+    "start_y_mm": 0,
+    "pitch_deg": -0.89,
+    "pitch_min_deg": -3.5,
+    "pitch_max_deg": 2.68
+  },
+  {
+    "job_id": 7,
+    "test": "run_test",
+    "args": {
+      "mode": "side_right",
+      "name": "run_test"
+    },
+    "dx_mm": 3,
+    "dy_mm": -759,
+    "yaw_deg": -1.46,
+    "path_mm": 1284,
+    "upright": true,
+    "fallen": false,
+    "started_fallen": false,
+    "status": "completed",
+    "odometry": null,
+    "values": {
+      "motion.side_right_20_mm": 759
+    },
+    "previous": {
+      "motion.side_right_20_mm": 755.996
+    },
+    "start_x_mm": 0,
+    "start_y_mm": 0,
+    "pitch_deg": -0.89,
+    "pitch_min_deg": -3.58,
+    "pitch_max_deg": 2.39
+  },
+  {
+    "job_id": 8,
+    "test": "run_test",
+    "args": {
+      "mode": "backwards",
+      "name": "run_test"
+    },
+    "dx_mm": -1402,
+    "dy_mm": 3,
+    "yaw_deg": 1.03,
+    "path_mm": 1992,
+    "upright": true,
+    "fallen": false,
+    "started_fallen": false,
+    "status": "completed",
+    "odometry": null,
+    "values": {},
+    "previous": {},
+    "start_x_mm": 0,
+    "start_y_mm": 0,
+    "pitch_deg": -0.85,
+    "pitch_min_deg": -6.8,
+    "pitch_max_deg": 1.05
+  },
+  {
+    "job_id": 9,
+    "test": "run_test",
+    "args": {
+      "cycles": 10,
+      "mode": "custom",
+      "right_leg": true,
+      "side_mm": 0,
+      "step_mm": 24,
+      "name": "run_test"
+    },
+    "dx_mm": 295,
+    "dy_mm": -9,
+    "yaw_deg": -0.97,
+    "path_mm": 752,
+    "upright": true,
+    "fallen": false,
+    "started_fallen": false,
+    "status": "completed",
+    "odometry": null,
+    "values": {},
+    "previous": {},
+    "start_x_mm": 0,
+    "start_y_mm": 0,
+    "pitch_deg": -0.86,
+    "pitch_min_deg": -3.46,
+    "pitch_max_deg": 2.39
+  },
+  {
+    "job_id": 10,
+    "test": "jump_test",
+    "args": {
+      "count": 10,
+      "direction": "forward",
+      "name": "jump_test"
+    },
+    "dx_mm": 207,
+    "dy_mm": -8,
+    "yaw_deg": -1.16,
+    "path_mm": 1028,
+    "upright": true,
+    "fallen": false,
+    "started_fallen": false,
+    "status": "completed",
+    "odometry": null,
+    "values": {
+      "motion.jump_forward_mm": 21
+    },
+    "previous": {
+      "motion.jump_forward_mm": 20.681
+    },
+    "start_x_mm": 0,
+    "start_y_mm": 0,
+    "pitch_deg": -0.34,
+    "pitch_min_deg": -8.5,
+    "pitch_max_deg": 2.81,
+    "repeats": 10,
+    "mean_dx_mm": 21,
+    "mean_dy_mm": -1
+  },
+  {
+    "job_id": 11,
+    "test": "jump_test",
+    "args": {
+      "count": 10,
+      "direction": "backward",
+      "name": "jump_test"
+    },
+    "dx_mm": -142,
+    "dy_mm": -13,
+    "yaw_deg": 1.53,
+    "path_mm": 218,
+    "upright": true,
+    "fallen": false,
+    "started_fallen": false,
+    "status": "completed",
+    "odometry": null,
+    "values": {
+      "motion.jump_backward_mm": 14
+    },
+    "previous": {
+      "motion.jump_backward_mm": 14.162
+    },
+    "start_x_mm": 0,
+    "start_y_mm": 0,
+    "pitch_deg": -0.37,
+    "pitch_min_deg": -3.99,
+    "pitch_max_deg": -0.13,
+    "repeats": 10,
+    "mean_dx_mm": -14,
+    "mean_dy_mm": -1
+  },
+  {
+    "job_id": 12,
+    "test": "jump_test",
+    "args": {
+      "count": 10,
+      "direction": "left",
+      "name": "jump_test"
+    },
+    "dx_mm": 26,
+    "dy_mm": 174,
+    "yaw_deg": 0.86,
+    "path_mm": 742,
+    "upright": true,
+    "fallen": false,
+    "started_fallen": false,
+    "status": "completed",
+    "odometry": null,
+    "values": {
+      "motion.jump_left_mm": 17
+    },
+    "previous": {
+      "motion.jump_left_mm": 17.509
+    },
+    "start_x_mm": 0,
+    "start_y_mm": 0,
+    "pitch_deg": -0.37,
+    "pitch_min_deg": -1.33,
+    "pitch_max_deg": -0.09,
+    "repeats": 10,
+    "mean_dx_mm": 3,
+    "mean_dy_mm": 17
+  },
+  {
+    "job_id": 13,
+    "test": "jump_test",
+    "args": {
+      "count": 10,
+      "direction": "right",
+      "name": "jump_test"
+    },
+    "dx_mm": 13,
+    "dy_mm": -178,
+    "yaw_deg": -5.75,
+    "path_mm": 759,
+    "upright": true,
+    "fallen": false,
+    "started_fallen": false,
+    "status": "completed",
+    "odometry": null,
+    "values": {
+      "motion.jump_right_mm": 18
+    },
+    "previous": {
+      "motion.jump_right_mm": 17.361
+    },
+    "start_x_mm": 0,
+    "start_y_mm": 0,
+    "pitch_deg": -0.36,
+    "pitch_min_deg": -1.25,
+    "pitch_max_deg": -0.13,
+    "repeats": 10,
+    "mean_dx_mm": 1,
+    "mean_dy_mm": -18
+  },
+  {
+    "job_id": 14,
+    "test": "jump_test",
+    "args": {
+      "count": 10,
+      "direction": "on_spot",
+      "name": "jump_test"
+    },
+    "dx_mm": 0,
+    "dy_mm": 0,
+    "yaw_deg": 0.21,
+    "path_mm": 150,
+    "upright": true,
+    "fallen": false,
+    "started_fallen": false,
+    "status": "completed",
+    "odometry": null,
+    "values": {},
+    "previous": {},
+    "start_x_mm": 0,
+    "start_y_mm": 0,
+    "pitch_deg": -0.38,
+    "pitch_min_deg": -0.97,
+    "pitch_max_deg": 1.31,
+    "repeats": 10,
+    "mean_dx_mm": 0,
+    "mean_dy_mm": 0
+  },
+  {
+    "job_id": 15,
+    "test": "kick_test",
+    "args": {
+      "leg": "right",
+      "mode": "regular",
+      "name": "kick_test"
+    },
+    "dx_mm": -190,
+    "dy_mm": 76,
+    "yaw_deg": -15.64,
+    "path_mm": 387,
+    "upright": false,
+    "fallen": true,
+    "started_fallen": false,
+    "status": "completed",
+    "odometry": null,
+    "values": {},
+    "previous": {},
+    "start_x_mm": 0,
+    "start_y_mm": 0,
+    "pitch_deg": -85.49,
+    "pitch_min_deg": -89.37,
+    "pitch_max_deg": -0.14,
+    "ball_contact": true,
+    "ball_dx_mm": 2962,
+    "ball_dy_mm": -64,
+    "ball_distance_mm": 2963,
+    "ball_path_mm": 2962
+  },
+  {
+    "job_id": 16,
+    "test": "kick_test",
+    "args": {
+      "leg": "right",
+      "mode": "regular",
+      "name": "kick_test"
+    },
+    "dx_mm": 143,
+    "dy_mm": -47,
+    "yaw_deg": -21.27,
+    "path_mm": 304,
+    "upright": true,
+    "fallen": false,
+    "started_fallen": false,
+    "status": "completed",
+    "odometry": null,
+    "values": {},
+    "previous": {},
+    "start_x_mm": 0,
+    "start_y_mm": 0,
+    "pitch_deg": -0.06,
+    "pitch_min_deg": -10.25,
+    "pitch_max_deg": 6.09,
+    "ball_contact": true,
+    "ball_dx_mm": 3001,
+    "ball_dy_mm": -269,
+    "ball_distance_mm": 3013,
+    "ball_path_mm": 3013
+  },
+  {
+    "job_id": 17,
+    "test": "kick_test",
+    "args": {
+      "leg": "left",
+      "mode": "regular",
+      "name": "kick_test"
+    },
+    "dx_mm": 144,
+    "dy_mm": 48,
+    "yaw_deg": 22.69,
+    "path_mm": 307,
+    "upright": true,
+    "fallen": false,
+    "started_fallen": false,
+    "status": "completed",
+    "odometry": null,
+    "values": {},
+    "previous": {},
+    "start_x_mm": 0,
+    "start_y_mm": 0,
+    "pitch_deg": -0.07,
+    "pitch_min_deg": -10.13,
+    "pitch_max_deg": 6.18,
+    "ball_contact": true,
+    "ball_dx_mm": 2973,
+    "ball_dy_mm": 261,
+    "ball_distance_mm": 2984,
+    "ball_path_mm": 2984
+  },
+  {
+    "job_id": 18,
+    "test": "get_up_test",
+    "args": {
+      "fixture": "front",
+      "name": "get_up_test"
+    },
+    "dx_mm": -363,
+    "dy_mm": 4,
+    "yaw_deg": 0.05,
+    "path_mm": 389,
+    "upright": true,
+    "fallen": true,
+    "started_fallen": true,
+    "status": "completed",
+    "odometry": null,
+    "values": {},
+    "previous": {},
+    "start_x_mm": 0,
+    "start_y_mm": 0,
+    "pitch_deg": 0.01,
+    "pitch_min_deg": -0.4,
+    "pitch_max_deg": 89.58
+  },
+  {
+    "job_id": 19,
+    "test": "get_up_test",
+    "args": {
+      "fixture": "left",
+      "name": "get_up_test"
+    },
+    "dx_mm": -241,
+    "dy_mm": -254,
+    "yaw_deg": -103.89,
+    "path_mm": 643,
+    "upright": true,
+    "fallen": false,
+    "started_fallen": true,
+    "status": "completed",
+    "odometry": null,
+    "values": {},
+    "previous": {},
+    "start_x_mm": 0,
+    "start_y_mm": 0,
+    "pitch_deg": -0.03,
+    "pitch_min_deg": -89.68,
+    "pitch_max_deg": 79.95
+  },
+  {
+    "job_id": 20,
+    "test": "get_up_test",
+    "args": {
+      "fixture": "right",
+      "name": "get_up_test"
+    },
+    "dx_mm": -90,
+    "dy_mm": 298,
+    "yaw_deg": 103.86,
+    "path_mm": 657,
+    "upright": true,
+    "fallen": false,
+    "started_fallen": true,
+    "status": "completed",
+    "odometry": null,
+    "values": {},
+    "previous": {},
+    "start_x_mm": 0,
+    "start_y_mm": 0,
+    "pitch_deg": -0.03,
+    "pitch_min_deg": -89.68,
+    "pitch_max_deg": 79.86
+  }
+]

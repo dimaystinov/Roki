@@ -1,0 +1,87 @@
+<mujoco model="roki2_soccer">
+
+  <include file="roki_v2.xml" />
+
+  <statistic center="0 0 0.55" extent="1.1" />
+
+  <visual>
+    <headlight diffuse="0.35 0.35 0.36" ambient="0.30 0.30 0.33" specular="0.15 0.15 0.15" />
+    <rgba haze="0.15 0.25 0.35 1" />
+    <global azimuth="140" elevation="-22" offwidth="2560" offheight="1440" />
+  <quality shadowsize="4096" offsamples="2" /><map znear="0.02" zfar="40" shadowclip="3.5" shadowscale="1.0" /></visual>
+
+  <asset>
+    <!-- 50 mm tape along a 25 mm radius pipe spans two radians. -->
+    <mesh name="tape_post" scale="1 1 0.925" vertex="0.01361562 -0.02120507 0 0.01361562 -0.02120507 1 0.01615312 -0.0193421 0 0.01615312 -0.0193421 1 0.01843856 -0.0171773 0 0.01843856 -0.0171773 1 0.02043627 -0.01474445 0 0.02043627 -0.01474445 1 0.02211508 -0.01208152 0 0.02211508 -0.01208152 1 0.02344879 -0.009230068 0 0.02344879 -0.009230068 1 0.02441659 -0.00623458 0 0.02441659 -0.00623458 1 0.02500338 -0.003141803 0 0.02500338 -0.003141803 1 0.0252 0 0 0.0252 0 1 0.02500338 0.003141803 0 0.02500338 0.003141803 1 0.02441659 0.00623458 0 0.02441659 0.00623458 1 0.02344879 0.009230068 0 0.02344879 0.009230068 1 0.02211508 0.01208152 0 0.02211508 0.01208152 1 0.02043627 0.01474445 0 0.02043627 0.01474445 1 0.01843856 0.0171773 0 0.01843856 0.0171773 1 0.01615312 0.0193421 0 0.01615312 0.0193421 1 0.01361562 0.02120507 0 0.01361562 0.02120507 1" face="0 2 3 0 3 1 2 4 5 2 5 3 4 6 7 4 7 5 6 8 9 6 9 7 8 10 11 8 11 9 10 12 13 10 13 11 12 14 15 12 15 13 14 16 17 14 17 15 16 18 19 16 19 17 18 20 21 18 21 19 20 22 23 20 23 21 22 24 25 22 25 23 24 26 27 24 27 25 26 28 29 26 29 27 28 30 31 28 31 29 30 32 33 30 33 31"/>
+    <mesh name="tape_bar" scale="1 1 1.05" vertex="0.01361562 -0.02120507 0 0.01361562 -0.02120507 1 0.01615312 -0.0193421 0 0.01615312 -0.0193421 1 0.01843856 -0.0171773 0 0.01843856 -0.0171773 1 0.02043627 -0.01474445 0 0.02043627 -0.01474445 1 0.02211508 -0.01208152 0 0.02211508 -0.01208152 1 0.02344879 -0.009230068 0 0.02344879 -0.009230068 1 0.02441659 -0.00623458 0 0.02441659 -0.00623458 1 0.02500338 -0.003141803 0 0.02500338 -0.003141803 1 0.0252 0 0 0.0252 0 1 0.02500338 0.003141803 0 0.02500338 0.003141803 1 0.02441659 0.00623458 0 0.02441659 0.00623458 1 0.02344879 0.009230068 0 0.02344879 0.009230068 1 0.02211508 0.01208152 0 0.02211508 0.01208152 1 0.02043627 0.01474445 0 0.02043627 0.01474445 1 0.01843856 0.0171773 0 0.01843856 0.0171773 1 0.01615312 0.0193421 0 0.01615312 0.0193421 1 0.01361562 0.02120507 0 0.01361562 0.02120507 1" face="0 2 3 0 3 1 2 4 5 2 5 3 4 6 7 4 7 5 6 8 9 6 9 7 8 10 11 8 11 9 10 12 13 10 13 11 12 14 15 12 15 13 14 16 17 14 17 15 16 18 19 16 19 17 18 20 21 18 21 19 20 22 23 20 23 21 22 24 25 22 25 23 24 26 27 24 27 25 26 28 29 26 29 27 28 30 31 28 31 29 30 32 33 30 33 31"/>
+    <material name="goal_pvc" rgba=".96 .96 .96 1"/>
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3" markrgb="0.8 0.8 0.8" width="300" height="300" />
+    <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.2" />
+
+    <texture type="2d" name="floor_texture_rubber" file="floor_textures/rubber.png" />
+    <texture type="2d" name="floor_texture_carpet" file="floor_textures/carpet.png" />
+    <texture type="2d" name="floor_texture_hard_mat" file="floor_textures/hard_mat.png" />
+    <texture type="2d" name="floor_texture_linoleum" file="floor_textures/linoleum.png" />
+    <texture type="2d" name="floor_texture_ice" file="floor_textures/ice.png" />
+    <material name="floor_material_rubber" texture="floor_texture_rubber" texuniform="true" texrepeat="2 2" reflectance="0.2" />
+    <material name="floor_material_carpet" texture="floor_texture_carpet" texuniform="true" texrepeat="2 2" reflectance="0.2" />
+    <material name="floor_material_hard_mat" texture="floor_texture_hard_mat" texuniform="true" texrepeat="2 2" reflectance="0.2" />
+    <material name="floor_material_linoleum" texture="floor_texture_linoleum" texuniform="true" texrepeat="2 2" reflectance="0.2" />
+    <material name="floor_material_ice" texture="floor_texture_ice" texuniform="true" texrepeat="2 2" reflectance="0.2" />
+  <material name="grass" texture="fieldtex" texrepeat="1 1" texuniform="false" specular="0.05" shininess="0.06" /><material name="outfield" texture="outtex" texrepeat="30 22" specular="0.03" shininess="0.03" /><material name="line" rgba="0.97 0.97 0.97 1" /><material name="goalY" rgba="0.95 0.8 0.1 1" /><material name="goalB" rgba="0.15 0.35 0.85 1" /><material name="net" rgba="0.22 0.22 0.22 1" /><material name="netstop" rgba="0.3 0.3 0.3 0.1" /><material name="ball" rgba="1 0.54 0.08 1" /><texture name="sky" type="skybox" fileright="soccer_textures/sky_right.png" fileleft="soccer_textures/sky_left.png" fileup="soccer_textures/sky_up.png" filedown="soccer_textures/sky_down.png" filefront="soccer_textures/sky_front.png" fileback="soccer_textures/sky_back.png" /><texture name="fieldtex" type="2d" file="soccer_textures/field.png" /><texture name="outtex" type="2d" builtin="checker" rgb1="0.46 0.36 0.24" rgb2="0.49 0.39 0.26" width="256" height="256" /></asset>
+
+  <worldbody>
+    <!-- Moved beside the robot only by the servo calibration stand; kept off field in play. -->
+    <body name="calibration_stand" pos="100 0 0">
+      <geom name="stand_base" type="box" pos="-0.24 0 0.015" size="0.22 0.20 0.015" rgba="0.20 0.23 0.26 1" contype="0" conaffinity="0"/>
+      <geom name="stand_post" type="cylinder" fromto="-0.34 0 0.03 -0.34 0 0.70" size="0.018" rgba="0.55 0.58 0.60 1" contype="0" conaffinity="0"/>
+      <geom name="stand_boom" type="capsule" fromto="-0.34 0 0.70 0 0 0.70" size="0.012" rgba="0.55 0.58 0.60 1" contype="0" conaffinity="0"/>
+      <geom name="stand_tether" type="cylinder" fromto="0 0 0.70 0 0 0.43" size="0.006" rgba="0.12 0.12 0.13 1" contype="0" conaffinity="0"/>
+    </body>
+    <light name="sun" pos="2.2 -2.6 2.6" dir="-0.55 0.62 -0.85" directional="true" diffuse="0.85 0.84 0.78" specular="0.35 0.35 0.33" castshadow="true" /><light name="fill" pos="-2.5 2.0 2.5" dir="0.5 -0.4 -1" directional="true" diffuse="0.22 0.24 0.28" specular="0 0 0" castshadow="false" /><geom name="outfield" type="plane" size="6.5 5.0 0.05" pos="0 0 -0.002" material="outfield" contype="0" conaffinity="0" /><geom name="floor" size="2.00 1.50 0.05" type="plane" material="grass" friction="1.0 0.02 0.001" />
+
+    
+    
+    
+    <camera name="camera_top" mode="trackcom" pos="0 0 1.5" xyaxes="1 0 0 0 1 0" fovy="50" />
+    <camera name="camera_back" mode="trackcom" pos="0 -1.2 0.6" xyaxes="1 0 0 0 0.5 0.866" fovy="50" />
+    <camera name="camera_front" mode="trackcom" pos="0 1.2 0.6" xyaxes="-1 0 0 0 0.5 0.866" fovy="50" />
+    <camera name="camera_side" mode="trackcom" pos="-1.2 0 0.6" xyaxes="0 -1 0 0.5 0 0.866" fovy="50" />
+    <body name="sim_camera_mount" mocap="true" pos="0 0 0.4068">
+      <camera name="sim_head_camera" pos="0 0 0" xyaxes="0 -1 0 0 0 1" fovy="65" />
+    </body>
+  <body name="goal_yellow" pos="1.7 0 0">
+    <geom type="capsule" fromto="0 -0.525 .025 0 -0.525 .975" size=".025" material="goal_pvc" mass="0"/>
+    <geom type="capsule" fromto="0 -0.525 .025 0.3 -0.525 .025" size=".025" material="goal_pvc" mass="0"/>
+    <geom type="mesh" mesh="tape_post" pos="0 -0.525 .05" quat="0 0 0 1" material="goalY" mass="0" contype="0" conaffinity="0"/>
+    <geom type="capsule" fromto="0 0.525 .025 0 0.525 .975" size=".025" material="goal_pvc" mass="0"/>
+    <geom type="capsule" fromto="0 0.525 .025 0.3 0.525 .025" size=".025" material="goal_pvc" mass="0"/>
+    <geom type="mesh" mesh="tape_post" pos="0 0.525 .05" quat="0 0 0 1" material="goalY" mass="0" contype="0" conaffinity="0"/>
+    <geom type="capsule" fromto="0 -.525 .975 0 .525 .975" size=".025" material="goal_pvc" mass="0"/>
+    <geom type="capsule" fromto="0.3 -.525 .025 0.3 .525 .025" size=".025" material="goal_pvc" mass="0"/>
+    <geom type="mesh" mesh="tape_bar" pos="0 -.525 .975" quat="0 0 .70710678 .70710678" material="goalY" mass="0" contype="0" conaffinity="0"/>
+  </body>
+    <body name="goal_blue" pos="-1.7 0 0">
+    <geom type="capsule" fromto="0 -0.525 .025 0 -0.525 .975" size=".025" material="goal_pvc" mass="0"/>
+    <geom type="capsule" fromto="0 -0.525 .025 -0.3 -0.525 .025" size=".025" material="goal_pvc" mass="0"/>
+    <geom type="mesh" mesh="tape_post" pos="0 -0.525 .05" quat="1 0 0 0" material="goalB" mass="0" contype="0" conaffinity="0"/>
+    <geom type="capsule" fromto="0 0.525 .025 0 0.525 .975" size=".025" material="goal_pvc" mass="0"/>
+    <geom type="capsule" fromto="0 0.525 .025 -0.3 0.525 .025" size=".025" material="goal_pvc" mass="0"/>
+    <geom type="mesh" mesh="tape_post" pos="0 0.525 .05" quat="1 0 0 0" material="goalB" mass="0" contype="0" conaffinity="0"/>
+    <geom type="capsule" fromto="0 -.525 .975 0 .525 .975" size=".025" material="goal_pvc" mass="0"/>
+    <geom type="capsule" fromto="-0.3 -.525 .025 -0.3 .525 .025" size=".025" material="goal_pvc" mass="0"/>
+    <geom type="mesh" mesh="tape_bar" pos="0 -.525 .975" quat=".70710678 -.70710678 0 0" material="goalB" mass="0" contype="0" conaffinity="0"/>
+  </body>
+<body name="walking_person" pos="100 100 0">
+  <geom type="capsule" fromto="0 0 0.36 0 0 1.18" size="0.16" rgba="0.12 0.14 0.17 1" mass="0" contype="0" conaffinity="0" />
+  <geom type="sphere" pos="0 0 1.43" size="0.16" rgba="0.73 0.53 0.41 1" mass="0" contype="0" conaffinity="0" />
+  <geom type="capsule" fromto="0 -0.09 0 0 -0.09 0.42" size="0.065" rgba="0.08 0.09 0.11 1" mass="0" contype="0" conaffinity="0" />
+  <geom type="capsule" fromto="0 0.09 0 0 0.09 0.42" size="0.065" rgba="0.08 0.09 0.11 1" mass="0" contype="0" conaffinity="0" />
+</body>
+<body name="soccer_ball" pos="-0.25 0 0.045"><freejoint name="soccer_ball_joint"/><geom name="ball" type="sphere" size="0.04" mass="0.026" material="ball" /></body></worldbody>
+  <contact>
+    <!-- Rolling resistance of the soccer carpet; the two rolling terms are lengths in metres. -->
+    <pair name="ball_carpet" geom1="ball" geom2="floor" condim="6" friction="1 1 0.005 0.004436 0.004436"/>
+  </contact>
+
+</mujoco>

@@ -1,0 +1,46 @@
+{
+  "field": {
+    "style": "solid",
+    "primary_rgb": [63, 104, 92],
+    "secondary_rgb": [44, 145, 53],
+    "stripe_count": 8
+  },
+  "imu": {"noise_std_deg": 0.2, "yaw_drift_deg_per_min": 6.0},
+  "lighting": {
+    "sun": 1.0,
+    "fill": 1.0,
+    "ambient": 0.3
+  },
+  "colors": {
+    "yellow_goal_rgb": [242, 204, 26],
+    "blue_goal_rgb": [38, 89, 217],
+    "ball_rgb": [255, 110, 12]
+  },
+  "camera": {
+    "fovy_deg": 65.0,
+    "forward_m": 0.04
+  },
+  "viewer": {
+    "azimuth_deg": 145.0,
+    "elevation_deg": -32.0,
+    "distance_m": 5.5,
+    "lookat_xyz": [0.0, 0.0, 0.3]
+  },
+  "opponents": {"enabled": true},
+  "person": {
+    "enabled": false,
+    "x_m": 1.7,
+    "y_m": 0.0,
+    "walk_amplitude_m": 0.0,
+    "walk_period_s": 6.0
+  },
+  "layout": {
+    "field_length_m": 4.0,
+    "field_width_m": 3.0,
+    "yellow_goal_x_m": 1.7,
+    "blue_goal_x_m": -1.7,
+    "robot_spawn_xy": [0.6, 0.0],
+    "robot_yaw_deg": 180.0,
+    "ball_spawn_xy": [0.0, 0.0]
+  }
+}

@@ -1,0 +1,71 @@
+--- a/usr/bin/roki-display.py
++++ b/usr/bin/roki-display.py
+@@ -10,6 +10,8 @@
+ import st7789
+ 
+ sys.path.insert(0, "/usr/lib/roki")
++
++from roki_imu_status import read_status
+ 
+ from roki_display_font import (
+     FALLBACK_GLYPH,
+@@ -282,6 +284,7 @@
+         self.disp.begin()
+ 
+         self.status_key = None
++        self.imu_status = {"state": "no_data", "unchanged_s": 0}
+         self.snapshot = NetlinkSnapshot()
+         self.event_netlink = None
+         self.status_items = []
+@@ -291,7 +294,7 @@
+         self.closed = False
+ 
+     def render(self):
+-        key = (status_items_key(self.status_items), self.ssid, CUSTOM_TEXT)
++        key = (status_items_key(self.status_items), self.ssid, CUSTOM_TEXT, self.imu_status["state"], self.imu_status["unchanged_s"])
+         if key == self.status_key:
+             return
+         self.status_key = key
+@@ -331,12 +334,27 @@
+             draw_text(image, 8, y, "SSID: ")
+             draw_text(image, 56, y, text_fits(self.ssid or "not connected", 23))
+ 
++        state = self.imu_status['state']
++        label, color = {
++            'updating': ('UPDATING', (30, 220, 70)),
++            'checking': ('CHECKING', (255, 190, 0)),
++            'suspect': ('STUCK?', (255, 150, 0)),
++            'no_data': ('NO DATA', (255, 50, 50)),
++            'stalled': ('STALLED', (255, 50, 50)),
++        }[state]
++        if state == 'updating' and self.imu_status.get('counter_present'):
++            label = 'OK'
++        elif state in ('updating','checking') and not self.imu_status.get('counter_present'):
++            label, color = 'NO COUNTER', (255, 190, 0)
++        if state == 'suspect':
++            label += ' ' + str(self.imu_status['unchanged_s']) + 's'
++        draw_text(image, 8, 216, text_fits('IMU ' + self.imu_status.get('active_source','body').upper() + ': ' + label, 28), foreground=color)
+         self.disp.display(image)
+         status_line = " ".join(
+             f'{item["ifname"]}:{"up" if item["up"] else "down"}:{item["addr"]}'
+             for item in self.status_items
+         )
+-        print(f"roki-display: {status_line} ssid={self.ssid!r}", flush=True)
++        print(f"roki-display: {status_line} ssid={self.ssid!r} imu_body={self.imu_status['state']}", flush=True)
+ 
+     def wlan_link_up(self):
+         return any(item["ifname"] == "wlan0" and item["up"] for item in self.status_items)
+@@ -427,9 +445,11 @@
+         self.refresh_network()
+         try:
+             while True:
+-                timeout = None
++                self.imu_status = read_status(now=time.monotonic())
++                self.render()
++                timeout = 0.5
+                 if self.ssid_retry_deadline is not None:
+-                    timeout = max(0, self.ssid_retry_deadline - time.monotonic())
++                    timeout = min(timeout, max(0, self.ssid_retry_deadline - time.monotonic()))
+                 readable, _, _ = select.select([self.event_netlink], [], [], timeout)
+                 if self.event_netlink in readable:
+                     payload = self.event_netlink.recv(65535)

@@ -1,0 +1,94 @@
+--- /dev/null
++++ b/source/ImuProgress.h
+@@ -0,0 +1,17 @@
++#ifndef IMU_PROGRESS_H
++#define IMU_PROGRESS_H
++#include <stdint.h>
++// Progress of distinct sensor timestamps, never host reads or polling loops.
++struct ImuProgress {
++  uint32_t sequence = 0;
++  uint64_t timestamp = 0;
++  bool initialized = false;
++  void observe(uint64_t ticks) {
++    if (!initialized || ticks != timestamp) {
++      timestamp = ticks;
++      initialized = true;
++      ++sequence;
++    }
++  }
++};
++#endif
+--- a/source/HwImu.h
++++ b/source/HwImu.h
+@@ -12,6 +12,7 @@
+ #include "CsConfig.h"
+ 
+ #include <stdint.h>
++#include "ImuProgress.h"
+ 
+ 
+ //Размер рабочего буфера
+@@ -19,6 +20,7 @@
+ 
+ struct Quaternion
+   {
++    ImuProgress progress;
+     uint64_t mTimestamp; //!< Штамп времени в нс
+     uint32_t mTimeS;     //!< Секунды штампа времени
+     uint32_t mTimeNS;    //!< Наносекунды штампа времени
+--- a/source/HwImu.cpp
++++ b/source/HwImu.cpp
+@@ -175,6 +175,7 @@
+   qt->mIntZ = data.z;
+   qt->mIntW = data.w;
+   qt->mIntAcc = data.accuracy;
++  qt->progress.observe(*callback_info->time_stamp);
+   return;
+ 
+   qt->mX = data.x / 16384.0f;
+--- a/source/HwUartHeadKondo.cpp
++++ b/source/HwUartHeadKondo.cpp
+@@ -157,6 +157,26 @@
+ uint8_t cmdArhiv[256];
+ int archivPtr;
+ 
++
++
++static uint16_t imuSnapshot[12];
++static void captureImuSnapshot() {
++  const Quaternion &q = hwImu.mQuaternion;
++  const uint32_t seq = q.progress.sequence;
++  const uint32_t ticks = uint32_t(q.progress.timestamp);
++  imuSnapshot[0] = 0x4d49; // "IMU1", little endian
++  imuSnapshot[1] = 0x3155;
++  imuSnapshot[2] = uint16_t(seq);
++  imuSnapshot[3] = uint16_t(seq >> 16);
++  imuSnapshot[4] = uint16_t(ticks);
++  imuSnapshot[5] = uint16_t(ticks >> 16);
++  imuSnapshot[6] = uint16_t(q.mIntX);
++  imuSnapshot[7] = uint16_t(q.mIntY);
++  imuSnapshot[8] = uint16_t(q.mIntZ);
++  imuSnapshot[9] = uint16_t(q.mIntW);
++  imuSnapshot[10] = uint16_t(hwImu.mError);
++  imuSnapshot[11] = q.progress.initialized ? 1 : 0;
++}
+ 
+ void HwUartHeadKondo::uartInit()
+   {
+@@ -224,6 +244,7 @@
+                 //Из памяти в uart
+                 int adr = mReceivBuf[6] | (mReceivBuf[7] << 8);
+                 int len = mReceivBuf[8];
++                captureImuSnapshot();
+ 
+                 //В mTransmitBuf сформируем ответ
+                 uint8_t ks = mReceivBuf[0] = len + 3;
+@@ -395,6 +416,8 @@
+ 
+ int HwUartHeadKondo::ramValue16(int adr)
+   {
++  if (adr >= 0x150 && adr < 0x168 && !(adr & 1))
++    return imuSnapshot[(adr - 0x150) / 2];
+   if (adr == 0x17c) return 0x4d44; // "DMA1" diagnostic layout signature.
+   if (adr == 0x17e) return 0x3141;
+   // Read-only diagnostics, uint32 little-endian counters at 0x180 + 4*i.
