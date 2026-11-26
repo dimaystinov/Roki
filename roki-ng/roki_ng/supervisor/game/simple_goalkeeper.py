@@ -37,7 +37,8 @@ class SimpleGoalkeeper(SimpleFootball):
             if not await self.g._settle(.02) or not self.g._same_plan(revision):
                 return False
             latest = await self.g._call('detection', 'football.status')
-            if not self.g._same_plan(revision) or latest.get('pose_id') != scene.get('pose_id'):
+            if (not self.g._same_plan(revision) or latest.get('received') is None
+                    or latest.get('pose_id') != scene.get('pose_id')):
                 return False
             dt = latest['received'] - scene['received']
             if dt >= .055:
