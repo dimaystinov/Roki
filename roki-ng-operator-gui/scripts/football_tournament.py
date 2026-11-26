@@ -52,8 +52,9 @@ def setup(row, profile):
         goal = model.body('goal_blue').id
         geoms = np.flatnonzero(model.geom_bodyid == goal)
         # Keep only the selected front upright in the attacker's rendered frame.
-        keep = geoms[np.argmax(model.geom_pos[geoms,0] + sign*model.geom_pos[geoms,1])]
-        masked = geoms[geoms != keep]
+        positions = model.geom_pos[geoms]
+        upright = (sign * positions[:, 1] > 0.4) & (positions[:, 2] > 0.25)
+        masked = geoms[~upright]
         match.mask = lambda t: masked
     if case == 'lost_ball':
         match.ball[:2] = [-.22, sign*.26]
@@ -68,7 +69,9 @@ def setup(row, profile):
 
 def run(row, directory, profile, visible=False):
     match = setup(row, profile)
-    result = asyncio.run(match.run(75., visible))
+    result = asyncio.run(match.run(75., visible, title=f"Match {row['number']}/100 | {row['case']} | {row['side']}"))
+    if result == "closed":
+        raise SystemExit("Viewer closed before final whistle")
     name = f"{row['number']:03}"
     with gzip.open(directory/f'trace-{name}.jsonl.gz', 'wt') as out:
         for sample in match.trace:

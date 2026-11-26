@@ -367,7 +367,7 @@ class Match:
                             [world.x, world.y], float(np.linalg.norm(self.ball-ball_before))))
         tasks[0] = asyncio.create_task(self.player(*self.players[0]))
 
-    async def run(self, seconds, visible, *, pickup_at=None, reentry='neutral'):
+    async def run(self, seconds, visible, *, pickup_at=None, reentry='neutral', title='Match'):
         self.restart_xy = tuple(self.ball[:2])
         window = mujoco.viewer.launch_passive(self.model, self.data) if visible else None
         if window:
@@ -407,7 +407,7 @@ class Match:
                         if task.done() and not task.cancelled():
                             task.result()
                     if window:
-                        window.set_texts((None, None, f"Match {self.data.time:.1f}s",
+                        window.set_texts((None, None, f"{title} | {self.data.time:.1f}s",
                                           " | ".join(g.info["phase"] for _,g,_,d in self.players)))
                         window.sync()
                         time.sleep(max(0., .02-(time.perf_counter()-before)))

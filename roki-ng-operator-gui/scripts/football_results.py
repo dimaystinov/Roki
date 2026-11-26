@@ -28,14 +28,28 @@ def metrics(match, trace):
             last_blocked = kicks
             blocks += 1
     errors = []
+    phase_counts = {}
     detour_samples = 0
     for sample in trace:
         home = sample['players']['home']
+        phase = home['phase'] or 'initial'
+        phase_counts[phase] = phase_counts.get(phase, 0) + 1
         pose = home['estimate']
         errors.append(100*math.dist(home['actual'][:2], (pose['x_m'], pose['y_m'])))
         detour_samples += home['phase'] == 'simple_bypass'
     outcome = match['result']
-    return dict(number=match['number'], case=match.get('case'), side=match['side'], split=match.get('split'),
+    dominant = max(phase_counts, key=phase_counts.get)
+    if outcome == 'goal_blue':
+        review = 'Сохранить розыгрыш для регрессии и воспроизвести на другой стороне.'
+    elif outcome == 'goal_yellow':
+        review = 'Сверить последний контакт соперника и позицию своего вратаря перед голом.'
+    elif contacts:
+        review = 'Сравнить направление мяча после контакта с положением ворот и вратаря.'
+    elif 'search' in dominant:
+        review = 'Проверить последнюю детекцию и направление поиска после потери мяча.'
+    else:
+        review = f'Проверить переход из {dominant} к ударной позиции.'
+    return dict(dominant_phase=dominant, review=review, number=match['number'], case=match.get('case'), side=match['side'], split=match.get('split'),
                 policy='B' if match.get('quick') else 'A', result=outcome,
                 points={'time':1,'goal_blue':3,'goal_yellow':0}[outcome],
                 shot_commands=kicks, distinct_shots=len(contacts), opponent_touches_after_shot=blocks,
@@ -93,6 +107,12 @@ def generate(directory):
         lines.append(f'| {case} | {len(sides[0])} | {wins} | {shots} |')
     lines += ['','[Матрица сценариев](manifest.json) · [Измерения по каждому матчу](metrics.csv) · [Протокол и критерии](PLAN.md)',
               '', 'Команды включают слабые стартовые удары. Атакующий удар требует контакта активной стопы при сильном ударе. Повторный удар требует новой команды и контакта соперника после предыдущего удара. Начальный наброс в сценарии rebound сам по себе в эту статистику не входит.']
+    lines += ['', '## Разбор каждого матча', '',
+              '| Матч | Исход | Команды удара | Сильные удары с контактом | Самая долгая фаза | Что проверить |',
+              '|---:|---|---:|---:|---|---|']
+    for r in entries.values():
+        lines.append('| ' + ' | '.join(str(r[k]) for k in
+                     ('number','result','shot_commands','distinct_shots','dominant_phase','review')) + ' |')
     (directory/'REPORT.md').write_text('\n'.join(lines)+'\n')
 
 
