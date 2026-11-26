@@ -70,3 +70,7 @@ python -m pip install "mujoco>=3.3,<4" opencv-python-headless pytest
 ```
 
 Состояние сборок и журналы доступны в [GitHub Actions](https://github.com/dimaystinov/Roki/actions/workflows/fpv-windows.yml). Исходные проекты Алексея Ягубова — [roki-ng](https://github.com/aleksey-yagubov/roki-ng) и [roki-ng-operator-gui](https://github.com/aleksey-yagubov/roki-ng-operator-gui). [Состав и лицензии поставки](roki-ng-operator-gui/packaging/THIRD_PARTY.md).
+
+## Контрольная версия перед серией из 100 матчей
+
+Тег `checkpoint-before-100-matches-2026.11.26` фиксирует программу на коммите `015f6b6a08b45a556c675e1871ee0c7726e659b9`. Игровые параметры серии сохранены в [профиле](docs/tournament/match-profile.json). Для сравнения используются пары с одинаковой стороной, позицией вратаря и шумом IMU. Варианты A и B различаются разрешением раннего удара. Первые 60 матчей служат для выбора стратегии, последние 40 — для независимой проверки.
