@@ -178,3 +178,23 @@ def test_ball_hint_loses_precision_after_translation_and_visual_reset(tmp_path):
     assert strategy.ball_pan_spread > 1700
     odom.correct((0.,0.,0.), 0.)
     assert strategy.expected_pan('ball') is None
+
+
+def test_recent_camera_bearing_survives_xy_jump_while_stationary(tmp_path):
+    import time
+    from roki_ng.body.motion.odometry import GameOdometry
+    from roki_ng.parameters import Parameters
+    from test_simple_football import harness
+    from test_goal_memory import sample
+
+    strategy, game = harness(tmp_path)
+    game.s.params = Parameters(tmp_path, robot_model='roki2')
+    game.s.body_telemetry = {'body.imu': sample() | {'yaw_epoch': 1}}
+    odom = game.odometry = GameOdometry(strategy.p, 'center', 0.)
+    strategy.remember_gaze(dict(received=time.monotonic(), ball=(.4,-.12), parts=[]))
+    before = strategy.expected_pan('ball')
+    odom.correct((1.2, .9, 0.), 0.)
+    assert strategy.expected_pan('ball') == before
+    assert strategy.ball_pan_spread > 0
+    game.s.body_telemetry['body.imu']['yaw_epoch'] = 2
+    assert strategy.expected_pan('ball') is None

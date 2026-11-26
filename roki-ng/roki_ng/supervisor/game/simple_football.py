@@ -450,6 +450,12 @@ class SimpleFootball:
             point, stamp, path, epoch, revision = self.field_ball
             travel = odom.path - path
             if odom.confidence == 'degraded' or revision != odom.pose_revision:
+                # A map correction invalidates field coordinates. The last camera
+                # bearing remains useful if we barely moved in the same IMU epoch.
+                if 0 <= travel <= .08 and epoch == imu[1] and 0 <= time.monotonic()-stamp <= 1.5:
+                    self.ball_pan_spread = 900
+                    return self.expected_gaze.pan('ball', yaw=imu[0], epoch=imu[1],
+                                                  now=time.monotonic(), sign=geometry.pan_sign)
                 return None
             if imu[1] == epoch and 0 <= time.monotonic()-stamp < 4 and .025 < travel < .55:
                 x, y = odom.body_point(point)
