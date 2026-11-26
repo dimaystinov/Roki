@@ -31,16 +31,19 @@ class SimpleGoalkeeper(SimpleFootball):
         x, y = scene['ball']
         if not (.12 < x < 2. and abs(y) < .8):
             return False
-        if not await self.g._settle(.10) or not self.g._same_plan(revision):
-            return False
-        latest = await self.g._call('detection', 'football.status')
-        if not self.g._same_plan(revision):
-            return False
-        if (not latest.get('confirmed') or not latest.get('ball') or latest.get('pose_id') != scene.get('pose_id')
-                or time.monotonic()-latest['received'] > .25):
-            return False
-        dt = latest['received'] - scene['received']
-        if not .05 <= dt <= .35:
+        # Sample at camera cadence so the tracker can associate a fast ball
+        # between adjacent frames. Use a longer baseline for the velocity fit.
+        for _ in range(5):
+            if not await self.g._settle(.02) or not self.g._same_plan(revision):
+                return False
+            latest = await self.g._call('detection', 'football.status')
+            if not self.g._same_plan(revision) or latest.get('pose_id') != scene.get('pose_id'):
+                return False
+            dt = latest['received'] - scene['received']
+            if dt >= .055:
+                break
+        if (not latest.get('confirmed') or not latest.get('ball') or not .055 <= dt <= .35
+                or not 0 <= time.monotonic()-latest['received'] <= .25):
             return False
         nx, ny = latest['ball']
         closing = (x-nx)/dt
