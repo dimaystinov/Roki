@@ -1,0 +1,218 @@
+[
+  {
+    "height": 55,
+    "x": 150,
+    "y": 52,
+    "fallen": true,
+    "upright": false,
+    "peak": 17.21,
+    "travel": 3677
+  },
+  {
+    "height": 55,
+    "x": 130,
+    "y": 52,
+    "fallen": false,
+    "upright": true,
+    "peak": 3.22,
+    "travel": 3153
+  },
+  {
+    "height": 55,
+    "x": 150,
+    "y": 47,
+    "fallen": true,
+    "upright": false,
+    "peak": 15.19,
+    "travel": 3628
+  },
+  {
+    "height": 55,
+    "x": 150,
+    "y": 57,
+    "fallen": true,
+    "upright": false,
+    "peak": 17.85,
+    "travel": 3631
+  },
+  {
+    "height": 60,
+    "x": 150,
+    "y": 52,
+    "fallen": true,
+    "upright": false,
+    "peak": 21.1,
+    "travel": 3735
+  },
+  {
+    "height": 60,
+    "x": 130,
+    "y": 52,
+    "fallen": false,
+    "upright": true,
+    "peak": 3.29,
+    "travel": 3222
+  },
+  {
+    "height": 60,
+    "x": 150,
+    "y": 47,
+    "fallen": true,
+    "upright": false,
+    "peak": 18.12,
+    "travel": 3660
+  },
+  {
+    "height": 60,
+    "x": 150,
+    "y": 57,
+    "fallen": true,
+    "upright": false,
+    "peak": 22.17,
+    "travel": 3681
+  },
+  {
+    "height": 65,
+    "x": 150,
+    "y": 52,
+    "fallen": true,
+    "upright": false,
+    "peak": 24.11,
+    "travel": 1931
+  },
+  {
+    "height": 65,
+    "x": 130,
+    "y": 52,
+    "fallen": false,
+    "upright": true,
+    "peak": 3.08,
+    "travel": 3303
+  },
+  {
+    "height": 65,
+    "x": 150,
+    "y": 47,
+    "fallen": true,
+    "upright": false,
+    "peak": 21.14,
+    "travel": 3686
+  },
+  {
+    "height": 65,
+    "x": 150,
+    "y": 57,
+    "fallen": true,
+    "upright": false,
+    "peak": 24.82,
+    "travel": 3710
+  },
+  {
+    "height": 70,
+    "x": 150,
+    "y": 52,
+    "fallen": true,
+    "upright": false,
+    "peak": 25.34,
+    "travel": 3602
+  },
+  {
+    "height": 70,
+    "x": 130,
+    "y": 52,
+    "fallen": false,
+    "upright": true,
+    "peak": 1.38,
+    "travel": 3016
+  },
+  {
+    "height": 70,
+    "x": 150,
+    "y": 47,
+    "fallen": true,
+    "upright": false,
+    "peak": 22.39,
+    "travel": 3687
+  },
+  {
+    "height": 70,
+    "x": 150,
+    "y": 57,
+    "fallen": true,
+    "upright": false,
+    "peak": 25.52,
+    "travel": 3725
+  },
+  {
+    "height": 50,
+    "x": 150,
+    "y": 52,
+    "fallen": true,
+    "upright": false,
+    "peak": 13.94,
+    "travel": 3466
+  },
+  {
+    "height": 50,
+    "x": 130,
+    "y": 52,
+    "fallen": false,
+    "upright": true,
+    "peak": 3.13,
+    "travel": 3091
+  },
+  {
+    "height": 50,
+    "x": 150,
+    "y": 47,
+    "fallen": false,
+    "upright": true,
+    "peak": 13.03,
+    "travel": 3476
+  },
+  {
+    "height": 50,
+    "x": 150,
+    "y": 57,
+    "fallen": true,
+    "upright": false,
+    "peak": 14.29,
+    "travel": 3427
+  },
+  {
+    "height": 45,
+    "x": 150,
+    "y": 52,
+    "fallen": false,
+    "upright": true,
+    "peak": 2.66,
+    "travel": 2940
+  },
+  {
+    "height": 45,
+    "x": 130,
+    "y": 52,
+    "fallen": false,
+    "upright": true,
+    "peak": 2.91,
+    "travel": 3042
+  },
+  {
+    "height": 45,
+    "x": 150,
+    "y": 47,
+    "fallen": false,
+    "upright": true,
+    "peak": 2.54,
+    "travel": 2905
+  },
+  {
+    "height": 45,
+    "x": 150,
+    "y": 57,
+    "fallen": false,
+    "upright": true,
+    "peak": 4.29,
+    "travel": 3506
+  }
+]

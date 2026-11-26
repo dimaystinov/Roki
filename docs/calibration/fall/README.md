@@ -10,7 +10,7 @@
 | Мяч за пределами досягаемости, подъём 55 мм | 0 Н | 0 мм | +0,02° | Устоял |
 | Мяч на 150 мм, подъём 55 мм, отключён добавочный импульс модели мяча | 17,21 Н | 65 мм | −85,64° | Упал на спину |
 
-[Замедленная запись при разном расстоянии](kick-comparison.mov) · [Та же точка, до и после изменения движения стопы](kick-fixed.mov) · [Четыре фазы падения](fall-sequence.png)
+[Замедленная запись при разном расстоянии](https://github.com/dimaystinov/Roki/releases/download/fpv-calibration-2026.11.26/kick-comparison.mp4) · [Та же точка, до и после изменения движения стопы](https://github.com/dimaystinov/Roki/releases/download/fpv-calibration-2026.11.26/kick-fixed.mp4) · [Четыре фазы падения](fall-sequence.png)
 
 ## Последовательность событий
 
