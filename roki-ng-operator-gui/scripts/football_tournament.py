@@ -43,6 +43,13 @@ def setup(row, profile):
         visitor.opening_touch_required = False
         visitor.attack_axis = other.yaw
         match.players[2] = (other, adapter, visitor, delay)
+    # Keep the opening block as the original control. Pair both policies
+    # against identical keepers and an identical pursuing opponent.
+    if row['number'] > 20:
+        for index in (1, 3):
+            match.players[index][2].p['sim.keeper_intercept'] = True
+        match.players[2][2].p['sim.direct_pursuit'] = True
+        strategy.p['sim.precise_strike'] = row['quick']
     case = row['case']
     if case != 'centre':
         strategy.kickoff_pending = strategy.opening_touch_required = False

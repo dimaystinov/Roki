@@ -830,6 +830,11 @@ class SimpleFootball:
             if not self.final_keeper_check and not rechecked and not known_lane and not windows and time.monotonic()-self.keeper_glance_at > 12:
                 await self.observe_keeper(ball,yaw)
                 return
+            if self.p.get('sim.precise_strike') and visual_aim and not self.trimmed_shot and abs(error) > math.radians(3):
+                self.trimmed_shot = True
+                self.describe('simple_aim_adjust', 'reduce free-window heading error once at the toe')
+                await self.turn(error, tolerance=3)
+                return
             if visual_aim and abs(error) > math.radians(8 if self.trimmed_shot else 5):
                 self.trimmed_shot = True
                 self.describe('simple_aim_adjust', 'turn towards visual free-window centre')
@@ -901,6 +906,10 @@ class SimpleFootball:
                 self.describe('simple_attack_turn', 'turn towards goal behind ball')
                 await self.turn(error, tolerance=10)
                 return
+            if self.p.get('sim.direct_pursuit') and direction in ('left', 'right') and x > toe+radius+.04:
+                self.describe('simple_flank_walk', 'sidestep behind observed ball')
+                await self.walk(min(.14, abs(dy)), math.copysign(math.pi/2, dy))
+                return
             self.describe('simple_attack_orbit', f'{direction}; keep clearance from ball')
             await self.jump(direction, min(1., max(.35, max(abs(dx),abs(dy))/.04)))
             return
@@ -937,7 +946,10 @@ class SimpleFootball:
         if distance < .19 and travel < .035:
             await self.short_foot_jump(dx, dy)
         else:
-            await self.walk(min(.22, travel), course)
+            stride = .22
+            if self.p.get('sim.direct_pursuit') and not self.detour_side and distance > .45 and abs(course) < math.radians(30):
+                stride = min(.38, distance-.22)
+            await self.walk(min(stride, travel), course)
 
     async def watch_restart_ball(self):
         """Use only the head while waiting. Return true on confirmed ball displacement."""

@@ -117,6 +117,27 @@ class SimpleGoalkeeper(SimpleFootball):
             self.describe('keeper_heading', 'restore starting course by IMU')
             await self.turn(max(-.35, min(.35, error)))
             return
+        if self.p.get('sim.keeper_intercept'):
+            odom = getattr(self.g, 'odometry', None)
+            if odom and odom.confidence != 'degraded':
+                home_x, home_y = odom.body_point((odom.home_x, odom.home_y))
+                depth = -home_x
+                fresh = ball is not None and scene.get('confirmed') and time.monotonic()-scene['received'] < .5
+                if depth > .10 and (not fresh or ball[0] < 0 or math.hypot(*ball) > .90):
+                    self.describe('keeper_return', 'recover goal position')
+                    await self.walk(min(.16, math.hypot(home_x, home_y)), math.atan2(home_y, home_x))
+                    return
+                if fresh:
+                    x, y = ball
+                    step = min(.14, .30-depth, x-.10)
+                    own = self.specs[self.p['match.own_goal']]
+                    _, field_y = odom.field_point(ball)
+                    if (.17 < x < .68 and step > .025 and abs(y) < .23
+                            and abs(field_y-own['y']) < own['width']/2-.10):
+                        self.describe('keeper_intercept', 'close on visible ball inside goal width')
+                        course = math.atan2(y, x)
+                        await self.walk(step, course)
+                        return
         if ball is None:
             self.describe('keeper_hold', 'no fresh ball; no blind lateral pursuit')
             return

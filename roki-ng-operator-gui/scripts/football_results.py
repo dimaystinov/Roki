@@ -29,9 +29,14 @@ def metrics(match, trace):
             blocks += 1
     errors = []
     phase_counts = {}
+    flank_samples = intercept_samples = 0
     detour_samples = 0
     for sample in trace:
-        home = sample['players']['home']
+        players = sample['players']
+        flank_samples += players.get('visitor', {}).get('phase') == 'simple_flank_walk'
+        intercept_samples += sum(players.get(role, {}).get('phase') == 'keeper_intercept'
+                                 for role in ('keeper', 'ally_keeper'))
+        home = players['home']
         phase = home['phase'] or 'initial'
         phase_counts[phase] = phase_counts.get(phase, 0) + 1
         pose = home['estimate']
@@ -49,7 +54,7 @@ def metrics(match, trace):
         review = 'Проверить последнюю детекцию и направление поиска после потери мяча.'
     else:
         review = f'Проверить переход из {dominant} к ударной позиции.'
-    return dict(dominant_phase=dominant, review=review, number=match['number'], case=match.get('case'), side=match['side'], split=match.get('split'),
+    return dict(visitor_flank_samples=flank_samples, keeper_intercept_samples=intercept_samples, dominant_phase=dominant, review=review, number=match['number'], case=match.get('case'), side=match['side'], split=match.get('split'),
                 policy='B' if match.get('quick') else 'A', result=outcome,
                 points={'time':1,'goal_blue':3,'goal_yellow':0}[outcome],
                 shot_commands=kicks, distinct_shots=len(contacts), opponent_touches_after_shot=blocks,

@@ -103,3 +103,17 @@ def test_uncertain_map_requires_visual_aim_but_accepts_fresh_goal(tmp_path):
                       opening_source={'occupied': []})
     asyncio.run(strategy.attack_after_pass(ball, [clear_goal], rechecked=True))
     assert commands(game)[-1][0] == 'motion.kick'
+
+
+@pytest.mark.parametrize('side', [-1, 1])
+def test_pursuing_visitor_sidesteps_behind_ball(tmp_path, side):
+    ball = (.22, side*.24)
+    strategy, game = harness(tmp_path, ball=ball, goals=[])
+    strategy.p['sim.direct_pursuit'] = True
+    strategy.attack_axis = side*.40
+    strategy.last_scene = dict(confirmed=True, received=time.monotonic(), parts=[])
+    asyncio.run(strategy.attack_after_pass(ball, []))
+    [(op, payload)] = commands(game)
+    assert op == 'game.walk'
+    assert payload['course'] == pytest.approx(side*math.pi/2)
+    assert 0 < payload['distance_m'] <= .14
