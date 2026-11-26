@@ -83,7 +83,10 @@ def run(row, directory, profile, visible=False):
     with gzip.open(directory/f'trace-{name}.jsonl.gz', 'wt') as out:
         for sample in match.trace:
             out.write(json.dumps(sample)+'\n')
-    doc = dict(row, result=result, seconds=match.data.time, events=match.events)
+    mouth = match.players[0][2].specs[1 - match.players[0][2].p['match.own_goal']]
+    doc = dict(row, result=result, seconds=match.data.time, events=match.events,
+               blue_inner_width_m=mouth['width'], blue_centre_y_m=mouth['y'],
+               ball_radius_m=float(match.model.geom_size[match.ball_geom, 0]))
     tmp = directory/f'match-{name}.tmp'
     tmp.write_text(json.dumps(doc, indent=2)+'\n')
     tmp.replace(directory/f'match-{name}.json')

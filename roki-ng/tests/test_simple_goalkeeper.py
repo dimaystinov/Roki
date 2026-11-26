@@ -166,6 +166,7 @@ def test_trial_keeper_closes_then_returns_on_loss(tmp_path):
     k, game = keeper(tmp_path, ball=(.48, .08))
     k.p['sim.keeper_intercept'] = True
     odom = game.odometry = GameOdometry(k.p, 'goalkeeper', 0.)
+    game._settle = AsyncMock(return_value=True)
     k.walk = AsyncMock()
     k.look.return_value.update(confirmed=True)
     asyncio.run(k.step())
@@ -179,3 +180,18 @@ def test_trial_keeper_closes_then_returns_on_loss(tmp_path):
     distance, course = k.walk.await_args.args
     assert 0 < distance <= .16
     assert abs(course) == pytest.approx(3.14159)
+
+
+@pytest.mark.parametrize('point, blocks', [
+    ((.46, .05), True), ((.46, .20), False),
+    ((.50, .10), False), ((.54, .05), False)])
+def test_keeper_split_reads_incoming_direction(tmp_path, point, blocks):
+    k, game = keeper(tmp_path)
+    game._settle = AsyncMock(return_value=True)
+    k.move = AsyncMock(return_value=True)
+    now = time.monotonic()
+    first = dict(ball=(.50,.05), pose_id=2, confirmed=True, received=now-.10)
+    game._call.return_value = dict(first, ball=point, received=now)
+    assert asyncio.run(k.block_incoming(first, 1)) is blocks
+    assert [call.args[0] for call in k.move.await_args_list] == (
+        ['motion.splits', 'motion.pose'] if blocks else [])

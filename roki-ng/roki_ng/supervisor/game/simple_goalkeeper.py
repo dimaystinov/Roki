@@ -24,6 +24,41 @@ class SimpleGoalkeeper(SimpleFootball):
         self.motion_changed = False
         self.track_deadline = 0.
 
+    async def block_incoming(self, scene, revision):
+        """Predict a crossing at the keeper's feet from two stationary camera frames."""
+        if not scene or not scene.get('confirmed') or not scene.get('ball'):
+            return False
+        x, y = scene['ball']
+        if not (.12 < x < 2. and abs(y) < .8):
+            return False
+        if not await self.g._settle(.10) or not self.g._same_plan(revision):
+            return False
+        latest = await self.g._call('detection', 'football.status')
+        if not self.g._same_plan(revision):
+            return False
+        if (not latest.get('confirmed') or not latest.get('ball') or latest.get('pose_id') != scene.get('pose_id')
+                or time.monotonic()-latest['received'] > .25):
+            return False
+        dt = latest['received'] - scene['received']
+        if not .05 <= dt <= .35:
+            return False
+        nx, ny = latest['ball']
+        closing = (x-nx)/dt
+        if closing < .25 or nx <= 0:
+            return False
+        arrival = nx/closing
+        crossing_y = ny + (ny-y)*arrival/dt
+        if not (.12 <= arrival <= 2.0 and abs(crossing_y) <= .24):
+            return False
+        self.describe('keeper_split', f'incoming ball in {arrival:.2f}s at {crossing_y:+.2f}m')
+        if await self.move('motion.splits', dict(kind='small', crouch='off')) and self.g._same_plan(revision):
+            remaining = latest['received'] + arrival + .1 - time.monotonic()
+            if remaining > 0:
+                await self.g._settle(remaining)
+            if self.g._same_plan(revision):
+                await self.move('motion.pose', dict(name='base_stand'))
+        return True
+
     def motion_fresh(self, op, args):
         if op == 'game.jump' and args.get('direction') in ('left', 'right'):
             if time.monotonic() >= self.track_deadline:
@@ -78,6 +113,9 @@ class SimpleGoalkeeper(SimpleFootball):
         if not self.g._same_plan(revision):
             return
         ball = scene.get('ball') if scene else None
+        if self.p.get('sim.keeper_intercept'):
+            if await self.block_incoming(scene, revision) or not self.g._same_plan(revision):
+                return
         urgent = ball is not None and (math.hypot(*ball) < .7 or self.ball_speed > .15)
         if time.monotonic()-self.scan_at >= 4 and (not urgent or self.reacquire_heading):
             self.scan_at = time.monotonic()

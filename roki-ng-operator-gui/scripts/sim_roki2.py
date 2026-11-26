@@ -650,7 +650,7 @@ class GameAdapter:
                     await self.world.wait_frame(.02)
         elif op in ("game.jump", "game.walk"):
             await self._body_motion(op, args)
-        elif op in ("motion.kick", "motion.pose"):
+        elif op in ("motion.kick", "motion.pose", "motion.splits"):
             await self._body_motion(op, args)
         else:
             raise ValueError(f"Unsupported simulated move: {op}")

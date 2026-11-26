@@ -128,7 +128,7 @@ class PlayerWorld(sim.World):
 
 class MatchAdapter(sim.GameAdapter):
     async def _move(self, op, args, **kwargs):
-        if op in ("game.walk", "game.jump", "motion.kick"):
+        if op in ("game.walk", "game.jump", "motion.kick", "motion.splits"):
             name = self.world.prefix.rstrip("_") or "home"
             detail = args.get("direction") or args.get("leg") or args.get("kind")
             self.world.match.events.append((round(self.world.data.time, 2), name, op, detail))

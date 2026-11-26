@@ -54,7 +54,14 @@ def metrics(match, trace):
         review = 'Проверить последнюю детекцию и направление поиска после потери мяча.'
     else:
         review = f'Проверить переход из {dominant} к ударной позиции.'
-    return dict(visitor_flank_samples=flank_samples, keeper_intercept_samples=intercept_samples, dominant_phase=dominant, review=review, number=match['number'], case=match.get('case'), side=match['side'], split=match.get('split'),
+    crossings = [e[3][1] for e in events if e[1:3] == ['referee', 'goal_blue']]
+    clearance = None
+    if crossings and 'blue_inner_width_m' in match:
+        clearance = round(1000*(match['blue_inner_width_m']/2 - match['ball_radius_m']
+                                  - abs(crossings[-1]-match['blue_centre_y_m'])))
+    return dict(blue_goal_clearance_mm=clearance,
+                keeper_splits=sum(e[2] == 'motion.splits' for e in events),
+                visitor_flank_samples=flank_samples, keeper_intercept_samples=intercept_samples, dominant_phase=dominant, review=review, number=match['number'], case=match.get('case'), side=match['side'], split=match.get('split'),
                 policy='B' if match.get('quick') else 'A', result=outcome,
                 points={'time':1,'goal_blue':3,'goal_yellow':0}[outcome],
                 shot_commands=kicks, distinct_shots=len(contacts), opponent_touches_after_shot=blocks,
