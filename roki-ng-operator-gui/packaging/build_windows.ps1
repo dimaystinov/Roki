@@ -19,9 +19,10 @@ Checked 'cmake' @('--install','.deps/windows/build','--prefix',$Install)
 Checked 'cmake' @('-S','native/macos','-B','.deps/windows/bootstrap','-G','Ninja','-DCMAKE_BUILD_TYPE=Release',"-DCMAKE_PREFIX_PATH=$Install;$Qt")
 Checked 'cmake' @('--build','.deps/windows/bootstrap')
 }
-if ($NativeOnly) { exit 0 }
 $env:PATH = "$Install/bin;$Install/lib;$env:PATH"
 Checked 'python' @('-c',"from pathlib import Path; from PySide6.QtCore import qVersion; Path('.deps/windows/qt-version.txt').write_text(qVersion())")
+if ($NativeOnly) { exit 0 }
+Checked (Join-Path $Root '..\Roki FPV.cmd') @('--check-gui')
 Checked 'python' @('-m','unittest','discover','-s','tests')
 Checked 'python' @('-m','PyInstaller','--noconfirm','packaging/fpv_roki.spec')
 # Проверка без DLL из conda и Visual Studio. У CI нет гарантированного GPU.
