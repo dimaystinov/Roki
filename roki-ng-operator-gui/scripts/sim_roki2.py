@@ -843,6 +843,9 @@ class SimRobot(FakeRobot):
             if op == "detection.stop":
                 self.stop_output("detection")
             return self.diagnostic.command(op, body, self)
+        if op == "session.close":
+            for name in list(self.outputs):
+                self.stop_output(name)
         if op == "camera.stop":
             self._require_control()
             self.diagnostic.stop()
