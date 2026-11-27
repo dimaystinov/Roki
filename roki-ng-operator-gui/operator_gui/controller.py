@@ -29,6 +29,7 @@ class Controller(QObject):
     changed = Signal()
     calibrationChanged = Signal()
     tiltKeys = ("walk.body_tilt_forward", "kick.body_tilt", "kick.recovery_tilt")
+    testMeasurementsChanged = Signal()
     parameterChanged = Signal()
     parameterGroupsChanged = Signal()
 
@@ -75,6 +76,8 @@ class Controller(QObject):
         self.param_text = "Выберите ключ после запроса каталога."
         self.param_parts = {}
         self.test_schemas = {}
+        self.test_measurements = {}
+        self.test_measurement_saved = {}
         self.capabilities = {}
         self.capabilities_text = "Возможности ещё не запрошены."
         self.notice = ""
@@ -88,7 +91,6 @@ class Controller(QObject):
         self.clock = QTimer(self)
         self.clock.setInterval(1000)
         self.clock.timeout.connect(self.changed.emit)
-        self.clock.timeout.connect(self.refreshCalibration)
         self.clock.start()
         self._log("INFO", "Клиент запущен. Подключение только по явному действию оператора.")
         self.streams = Streams(self.transport, self.control, self._log, self)
@@ -180,6 +182,8 @@ class Controller(QObject):
         self.last_log_record = self.gaps = 0
         self.param_parts = {}
         self.test_schemas.clear()
+        self.test_measurements.clear()
+        self.testMeasurementsChanged.emit()
         self.capabilities = {}
         self.control.mode = self.mode
         self.parameterChanged.emit()
@@ -192,7 +196,6 @@ class Controller(QObject):
         self.test_text = "Каталог тестов ещё не запрошен."
         self._log("INFO", f"Подключён {self.robot}. Сессия наблюдения, управление не захвачено.")
         self.transport.request("log.subscribe", {"level": "DEBUG", "sources": []})
-        self.refreshCalibration()
         self.changed.emit()
 
     @Property("QVariantMap", notify=calibrationChanged)
@@ -325,6 +328,36 @@ class Controller(QObject):
             return
         self.control.command("params.set", {"key": key, "value": value}, manual=False, job=False, context=key)
 
+    @Property("QVariantMap", notify=testMeasurementsChanged)
+    def testMeasurements(self):
+        return self.test_measurements
+
+    @Property("QVariantMap", notify=testMeasurementsChanged)
+    def testMeasurementSaved(self):
+        return self.test_measurement_saved
+
+    @Slot(str, "QVariantList")
+    def loadTestMeasurements(self, job_id, keys):
+        if job_id in self.test_measurements:
+            return
+        self.test_measurements[job_id] = {}
+        for key in keys:
+            self.transport.request("params.describe", {"key": key}, f"test-input:{job_id}:{key}")
+
+    @Slot(str, "QVariantMap")
+    def measureTest(self, job_id, values):
+        fields = self.test_measurements.get(job_id, {})
+        if not fields or set(values) != set(fields):
+            self.control.reject("Заполните все измерения этого теста.")
+            return
+        try:
+            numbers = {key: scalar(fields[key], value) for key, value in values.items()}
+        except (ValueError, TypeError, OverflowError) as exc:
+            self.control.reject(str(exc))
+            return
+        self.control.command("test.measure", {"job_id": int(job_id), "values": numbers},
+                             job=False, context="test-save:" + job_id)
+
     @Slot(str, "QVariantMap")
     def startTest(self, name, values):
         schema = self.test_schemas.get(name)
@@ -353,6 +386,23 @@ class Controller(QObject):
     @Slot(str, object, str)
     def _response(self, op, result, context):
         try:
+            if context.startswith("test-input:"):
+                _, job_id, key = context.split(":", 2)
+                self.test_measurements.setdefault(job_id, {})[key] = result
+                self.testMeasurementsChanged.emit()
+                return
+            if context.startswith("test-readback:"):
+                _, job_id = context.split(":", 1)
+                self.test_measurement_saved[job_id] = result.get("values", {})
+                self.testMeasurementsChanged.emit()
+                return
+            if context.startswith("test-save:"):
+                job_id = context.split(":", 1)[1]
+                self.transport.request("params.get", {"keys": list(result["saved"])}, "test-readback:" + job_id)
+                self.notice = "Измерения сохранены в профиле робота."
+                self._log("INFO", self.notice + " " + pretty(result))
+                self.changed.emit()
+                return
             if op == "sim.kick.preview":
                 self.kick_preview = result
                 self.calibrationChanged.emit()

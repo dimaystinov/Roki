@@ -27,7 +27,6 @@ MEASUREMENTS = {
     **{f"jump_{direction}": (f"motion.jump_{direction}_mm",)
        for direction in ("forward", "backward", "left", "right")},
 }
-UNAVAILABLE = {"new_kick": "Ball-guided calibration scenario not implemented; use regular with motion.kick_type"}
 
 
 def describe(name, args=None):
@@ -44,10 +43,10 @@ def describe(name, args=None):
                       "count": {"type": "int", "min": 1, "max": 100, "default": 10}},
         "rotation_test": {},
         "get_up_test": {},
-        "kick_test": {"mode": {"choices": ["regular", "new_kick"], "default": "regular"}},
+        "kick_test": {"mode": {"choices": ["regular"], "default": "regular"}},
     }[name]
     result = {"name": name, "title": TITLES[name], "parameters": parameters,
-            "unavailable_modes": UNAVAILABLE if name == "kick_test" else {},
+            "unavailable_modes": {},
             "body_imu": True,
             "automatic_parameters": list(ROTATION_KEYS) if name == "rotation_test" else []}
     if name == 'run_test':
@@ -80,9 +79,7 @@ def validate_args(args):
         return {"name": name, "direction": direction,
                 "count": number(args, "count", 10, 1, 100, True)}, f"jump_{direction}"
     if name == "kick_test":
-        mode = choice(args, "mode", "regular", ("regular", "new_kick"))
-        if mode in UNAVAILABLE:
-            raise Fault("not_supported", UNAVAILABLE[mode])
+        mode = choice(args, "mode", "regular", ("regular",))
         return {"name": name, "mode": mode}, mode
     return {"name": name}, name
 

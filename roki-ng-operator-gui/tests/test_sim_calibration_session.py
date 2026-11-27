@@ -68,8 +68,6 @@ def test_exclusive_series_and_repeat_from_exact_center(simulator):
         assert not robot.game_running and robot.motion_queue.empty()
         with pytest.raises(sim.Fault):
             robot._command("game.start", {"strategy": "simple_football"})
-        with pytest.raises(sim.Fault):
-            run("run_test")
         run("get_up_test", fixture="back")
         stand = await finish(robot)
         assert stand["upright"] and robot.calibration.phase == "rotation"
@@ -92,21 +90,13 @@ def test_exclusive_series_and_repeat_from_exact_center(simulator):
         assert robot.calibration.result["status"] == "cancelled"
         assert not robot.calibration.state()["busy"]
         robot.world.wait_frame = advance
-        with pytest.raises(sim.Fault):
-            run("run_test")
         run("rotation_test")
         rotation = await finish(robot)
-        assert robot.calibration.phase == "save_rotation"
-        assert robot.game.p == initial
-        assert robot.store.values == initial
+        assert robot.calibration.phase == "ready" and rotation["saved"]
         saved = dict(rotation["values"])
-        saved["motion.rotation_yield_left"] += .001
-        state = robot._command("sim.calibration.save", dict(job_id=rotation["job_id"], values=saved))
-        assert state["phase"] == "ready" and state["result"]["saved"]
-        assert rotation["values"] == state["result"]["proposed"] and "saved" not in rotation
-        assert len(msgpack.packb(state)) < 1300
+        assert saved and all(robot.game.p[k] == robot.store.values[k] == v for k,v in saved.items())
         disk = json.loads(robot.store.path.read_text())
-        assert all(disk[k] == robot.game.p[k] == v for k,v in saved.items())
+        assert all(disk[k] == v for k,v in saved.items())
         observed_parameters = []
 
         async def check_walking_profile(dt):
@@ -177,3 +167,18 @@ def test_viewer_wall_time_does_not_break_imu_continuity(simulator):
         world.data.time += .2
         imu.poll(hardware)
         assert imu.yaw_epoch == epoch + 1
+
+
+def test_standard_test_measure_saves_operator_input_idempotently(simulator):
+    robot = simulator
+    key = "motion.run_10_mm"
+    robot.jobs[7] = dict(job_id=7, operation="test.start", status="completed",
+                        manual_parameters=[key], run_command_mm=640.)
+    body = dict(job_id=7, values={key: 330.})
+    expected = {key: 330., "motion.run_10_command_mm": 640.}
+    for _ in range(2):
+        assert robot._result("test.measure", body) == dict(job_id=7, saved=expected)
+    assert all(robot.store.values[k] == robot.game.p[k] == v for k,v in expected.items())
+    robot.jobs[7]["status"] = "failed"
+    with pytest.raises(sim.Fault):
+        robot._result("test.measure", body)

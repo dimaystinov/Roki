@@ -597,7 +597,13 @@ class GameAdapter:
                     world.kick_contact = KickContact(world, body.test_kick_leg or args["leg"], args.get("soft", False) or body.test_soft)
                 for instruction in body.plan:
                     if op == "game.walk" and args.get("kind") == "approach" and time.monotonic()-last >= .12:
-                        scene = await self._call("detection", "football.status")
+                        if args.get("live_approach"):
+                            # Match the robot's continuous ball.status detector during
+                            # motion. Stationary football.pose windows are closed here.
+                            _, _, _, point = self.observe_ball()
+                            scene = {"confirmed": point is not None, "ball": point, "received": time.monotonic()}
+                        else:
+                            scene = await self._call("detection", "football.status")
                         if scene.get("confirmed") and scene.get("ball") is not None:
                             x, y = scene["ball"]
                             body.command("game.observe", dict(job_id=job, x_m=x, y_m=y, stamp=scene["received"]))
@@ -784,10 +790,32 @@ class SimRobot(FakeRobot):
             async def dispatch():
                 if op == "sim.calibration.mode":
                     return await self.switch_scene(body.get("enabled"))
+                if op == "test.start" and not self.calibration.enabled:
+                    self._require_control()
+                    if self.mode != "MANUAL":
+                        raise Fault("invalid_state", "Motion tests require MANUAL")
+                    if self.game_running:
+                        raise Fault("busy", "Stop the game before starting a motion test")
+                    await self.switch_scene(True)
+                if op == "game.start" and self.calibration.enabled:
+                    if self.calibration.job_id is not None:
+                        raise Fault("busy", "Wait for the motion test to finish")
+                    await self.switch_scene(False)
                 return self._command(op, body)
             return asyncio.run_coroutine_threadsafe(dispatch(), self.loop).result()
         if op == "sim.calibration.mode":
             return asyncio.run(self.switch_scene(body.get("enabled")))
+        if op == "test.start" and not self.calibration.enabled:
+            self._require_control()
+            if self.mode != "MANUAL":
+                raise Fault("invalid_state", "Motion tests require MANUAL")
+            if self.game_running:
+                raise Fault("busy", "Stop the game before starting a motion test")
+            asyncio.run(self.switch_scene(True))
+        if op == "game.start" and self.calibration.enabled:
+            if self.calibration.job_id is not None:
+                raise Fault("busy", "Wait for the motion test to finish")
+            asyncio.run(self.switch_scene(False))
         return self._command(op, body)
 
     def _command(self, op, body):
@@ -868,9 +896,8 @@ class SimRobot(FakeRobot):
             return {"key": key, "value": saved[key], "apply": SCHEMA[key][4]}
         if op == "test.start":
             if not session.enabled:
-                raise Fault("invalid_state", "Select calibration mode first")
+                raise Fault("invalid_state", "Motion test scene not prepared")
             args = dict(body)
-            session.check(args)
             if args.get("name") == "get_up_test":
                 if args.pop("fixture", "upright") not in ("upright","front","back","left","right"):
                     raise Fault("invalid_argument", "Unknown get-up fixture")
@@ -904,7 +931,24 @@ class SimRobot(FakeRobot):
             self.motion_queue.put((op, dict(body), ident))
             return result
         if op == "test.measure":
-            raise Fault("invalid_state", "Use sim.calibration.save for the current measurement")
+            self._require_control()
+            job = self.jobs.get(body.get("job_id"), {})
+            if job.get("operation") != "test.start" or job.get("status") != "completed":
+                raise Fault("invalid_state", "Measurements require a successfully completed test")
+            expected = set(job.get("manual_parameters", ()))
+            raw = body.get("values")
+            if not expected or not isinstance(raw, dict) or set(raw) != expected:
+                raise Fault("invalid_argument", "Provide exactly the job's manual_parameters")
+            values = {key: self.store.validate(key, value) + job.get("measurement_baseline", {}).get(key, 0)
+                      for key, value in raw.items()}
+            if 'run_command_mm' in job:
+                run_key, = expected
+                if job['run_command_mm'] <= 0:
+                    raise Fault("invalid_state", "No completed forward movement to calibrate")
+                values[run_key.removesuffix('_mm')+'_command_mm'] = job['run_command_mm']
+            saved = self.store.set_many(values)
+            self.game.p.update(saved)
+            return {"job_id": job["job_id"], "saved": saved}
         if op == "job.cancel":
             if not self.client or self.owner != self.client[0]:
                 raise Fault("no_control", "Acquire control")

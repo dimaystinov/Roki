@@ -1,4 +1,4 @@
-"""Exercise the simulator-only Tests panel with a Qt client and a UDP fixture."""
+"""The same robot-described test card works for hardware and the simulator."""
 import os
 from pathlib import Path
 import subprocess
@@ -24,28 +24,26 @@ def exercise():
 
     key = "motion.run_10_mm"
 
-    class Simulator(FakeRobot):
-        def __init__(self):
-            self.state = dict(enabled=False, busy=False, phase="stand", result=None)
-            super().__init__(robot_id="SIM-ROKI2")
-
+    class Robot(FakeRobot):
         def _result(self, op, body):
-            if op == "sim.calibration.mode":
-                self.mode = "MANUAL"
-                self.game_running = False
-                self.state["enabled"] = body["enabled"]
-            elif op == "sim.calibration.save":
-                assert body == dict(job_id=7, values={key: 890})
-                self.values.update(body["values"])
-                self.state["result"].update(saved=True, values=body["values"])
-            elif op == "test.start":
-                assert body == dict(name="get_up_test", fixture="upright")
-                self.state["phase"] = "rotation"
-                self.jobs[1] = dict(job_id=1, status="completed", operation=op)
+            if op == "test.list":
+                return {"items": ["measured_walk"]}
+            if op == "test.describe":
+                return dict(name="measured_walk", title="Measured walk",
+                            parameters={"cycles": dict(type="int", min=1, max=20, default=7)})
+            if op == "params.describe" and body["key"] == key:
+                return dict(key=key, type="float", min=1, max=10000,
+                            description="Измеренный путь, мм")
+            if op == "test.start":
+                assert body == dict(name="measured_walk", cycles=7)
+                self.jobs[1] = dict(job_id=1, status="completed", operation=op, progress=7,
+                                    test={"name":"measured_walk"}, manual_parameters=[key])
                 return dict(accepted=True, job_id=1)
-            elif op != "sim.calibration.status":
-                return super()._result(op, body)
-            return self.state
+            if op == "test.measure":
+                assert body == dict(job_id=1, values={key: 330.})
+                self.values.update(body["values"])
+                return dict(job_id=1, saved=body["values"])
+            return super()._result(op, body)
 
     def child(item, name):
         if item.objectName() == name:
@@ -55,68 +53,45 @@ def exercise():
             if found is not None:
                 return found
 
-    def click(name):
-        button = child(panel, name)
-        assert button is not None and button.isEnabled(), name
-        assert QMetaObject.invokeMethod(button, "clicked")
-
     app = QGuiApplication([])
-    robot = Simulator()
-    temp = tempfile.TemporaryDirectory()
-    c = Controller("127.0.0.1", robot.port, Path(temp.name))
-    engine = QQmlEngine()
-    for name, obj in [("backend", c), ("controls", c.control), ("testsModel", c.tests), ("slotsModel", c.slots)]:
-        engine.rootContext().setContextProperty(name, obj)
-    component = QQmlComponent(engine, QUrl.fromLocalFile(str(
-        Path(__file__).resolve().parents[1] / "qml/CatalogPanel.qml")))
-    panel = component.createWithInitialProperties(dict(kind="tests"))
-    try:
-        assert isinstance(panel, QQuickItem), component.errors()
-        panel.setWidth(640)
-        panel.setHeight(470)
-        c.connectRobot("127.0.0.1", robot.port)
-        wait_until(lambda: c.calibration.get("enabled") is False)
-        assert not child(panel, "calibrationModeButton").isEnabled()
-        c.control.acquire()
-        wait_until(lambda: c.control.owns)
-        click("calibrationModeButton")
-        wait_until(lambda: child(panel, "calibrationStandButton") is not None and c.control.view["ready"])
-        assert not child(panel, "calibrationShortButton").isEnabled()
-        assert not c.game.view["canStart"]
-        click("calibrationStandButton")
-        wait_until(lambda: child(panel, "calibrationRotationButton").isEnabled())
-        robot.state.update(phase="ready", result=dict(job_id=7, test="run_test", dx_mm=903,
-                           dy_mm=0, yaw_deg=0, path_mm=904, upright=True, pitch_deg=2.1,
-                           pitch_min_deg=-4.5, pitch_max_deg=8.3, values={key: 903},
-                           previous={key: 800}))
-        c.refreshCalibration()
-        wait_until(lambda: child(panel, "calibrationValue_" + key) is not None)
-        assert child(panel, "calibrationStandButton").isEnabled()
-        assert child(panel, "calibrationSaveTilt_walk.body_tilt_forward").isEnabled()
-        value = child(panel, "calibrationValue_" + key)
-        assert value.property("text") == "903"
-        pitch = child(panel, "calibrationPitch").property("text")
-        assert all(angle in pitch for angle in ("+2.1°", "-4.5°", "+8.3°"))
-        value.setProperty("text", "890.5")
-        click("calibrationSaveButton")
-        assert "целых миллиметрах" in c.control.error
-        value.setProperty("text", "890")
-        c.refreshCalibration()
-        app.processEvents()
-        assert value.property("text") == "890"
-        click("calibrationSaveButton")
-        wait_until(lambda: c.calibrationReadback.get(key) == 890)
-        assert not child(panel, "calibrationSaveButton").isEnabled()
-        click("footballModeButton")
-        wait_until(lambda: not c.calibration["enabled"])
-        wait_until(lambda: c.game.view["canStart"])
-        assert not robot.game_running
-        assert not robot.errors
-    finally:
-        c.shutdown()
-        robot.close()
-        temp.cleanup()
+    for robot_id in ("ROKI-TEST", "SIM-ROKI2"):
+        robot = Robot(robot_id=robot_id)
+        temp = tempfile.TemporaryDirectory()
+        c = Controller("127.0.0.1", robot.port, Path(temp.name))
+        engine = QQmlEngine()
+        for name, obj in [("backend",c), ("controls",c.control), ("testsModel",c.tests), ("slotsModel",c.slots)]:
+            engine.rootContext().setContextProperty(name,obj)
+        component = QQmlComponent(engine, QUrl.fromLocalFile(str(Path(__file__).resolve().parents[1]/"qml/CatalogPanel.qml")))
+        panel = component.createWithInitialProperties(dict(kind="tests"))
+        try:
+            assert isinstance(panel,QQuickItem), component.errors()
+            panel.setWidth(640)
+            panel.setHeight(640)
+            c.connectRobot("127.0.0.1",robot.port)
+            wait_until(lambda:c.transport.connected)
+            c.control.acquire()
+            wait_until(lambda:c.control.owns)
+            c.control.enterManual()
+            wait_until(lambda:c.control.view["ready"])
+            c.requestCatalog("tests")
+            wait_until(lambda:child(panel,"startTest_measured_walk") is not None and bool(c.test_schemas))
+            assert QMetaObject.invokeMethod(child(panel,"startTest_measured_walk"),"clicked")
+            wait_until(lambda:c.control.job.get("status")=="completed")
+            wait_until(lambda:key in c.testMeasurements.get("1",{}))
+            field=child(panel,"testMeasurement_"+key)
+            assert field is not None
+            field.setProperty("text","330")
+            assert QMetaObject.invokeMethod(field,"textEdited")
+            button=child(panel,"saveTestMeasurement_measured_walk")
+            wait_until(button.isEnabled)
+            assert QMetaObject.invokeMethod(button,"clicked")
+            wait_until(lambda:robot.values.get(key)==330.)
+            assert not any(m["op"].startswith(("sim.","camera.","detection.","videostream.")) for m in robot.requests)
+        finally:
+            c.shutdown()
+            panel.deleteLater()
+            app.processEvents()
+            robot.close()
 
-
-if __name__ == "__main__":
+if __name__=="__main__":
     exercise()

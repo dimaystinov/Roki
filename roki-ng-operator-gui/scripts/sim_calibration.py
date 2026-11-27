@@ -174,10 +174,6 @@ class CalibrationSession:
     def check(self, args):
         if self.job_id is not None:
             raise Fault("busy", "Calibration motion is active")
-        expected = {"stand": "get_up_test", "rotation": "rotation_test",
-                    "save_rotation": "rotation_test"}.get(self.phase)
-        if expected and args.get("name") != expected:
-            raise Fault("invalid_state", f"Complete {expected} and confirm its result first")
 
     def finish(self, robot, job, args, status):
         w = self.world
@@ -212,8 +208,9 @@ class CalibrationSession:
             self.phase = "rotation"
         if name == "rotation_test":
             r["values"] = dict(job.get("calibration", {}))
-            if self.phase != "ready" and set(r["values"]) == set(calibration.ROTATION_KEYS):
-                self.phase = "save_rotation"
+            if job.get("saved") and set(r["values"]) == set(calibration.ROTATION_KEYS):
+                self.phase = "ready"
+                r["saved"] = True
         for key in job.get("manual_parameters", []):
             distance = dy if any(k in key for k in ("_left","_right","shift_y")) else dx
             if "jump_" in key and self.repeats:
@@ -322,6 +319,12 @@ async def run_calibration(robot, job, args):
                 session.odo[1] += step*math.sin(yaw)
                 session.command_mm = cmd
         elif op == "calibration.ready":
+            try:
+                saved = robot.store.set_many(message["values"])
+                game.p.update(saved)
+            except Exception as exc:
+                game.football_body.command("calibration.resolve", {"job_id": message["job_id"], "error": str(exc)})
+                raise
             game.football_body.command("calibration.resolve", {"job_id": message["job_id"]})
 
     game.on_body_event = emit
@@ -364,6 +367,7 @@ async def run_calibration(robot, job, args):
         game.on_body_event = previous
         session.recording = False
         session.finish(robot,job,args,status)
+        job["measurement"] = session.result
         session.job_id = None
         game.football_body = None
         if "strength" in args and "visual" in locals():

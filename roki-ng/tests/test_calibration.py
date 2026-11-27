@@ -73,7 +73,7 @@ def test_catalog_and_descriptions_fit_udp():
         "short", "long", "spot", "backwards", "side_left", "side_right", "custom"]
     with pytest.raises(Fault) as unavailable:
         validate_args({"name": "kick_test", "mode": "new_kick"})
-    assert unavailable.value.code == 'not_supported'
+    assert unavailable.value.code == 'invalid_argument'
     with pytest.raises(Fault, match="mode=custom"):
         validate_args({"name": "run_test", "mode": "short", "cycles": 7})
     with pytest.raises(Fault):
