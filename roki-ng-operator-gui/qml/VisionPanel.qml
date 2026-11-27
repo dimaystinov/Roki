@@ -161,7 +161,14 @@ ScrollView {
             }
             RowLayout {
                 Layout.fillWidth:true
-                Button {text:"Сохранить";enabled:visionTuning.view.dirty && controls.view.owns && !controls.view.pending && !visionTuning.view.busy;onClicked:visionTuning.save("lab")}
+                Button {id:saveThresholds;text:"Сохранить";ToolTip.visible:hovered;ToolTip.text:"Сохранить пороги (пробел)";enabled:visionTuning.view.dirty && controls.view.owns && !controls.view.pending && !visionTuning.view.busy;onClicked:visionTuning.save("lab")}
+                Shortcut {
+                    sequence: "Space"
+                    autoRepeat: false
+                    enabled: root.visible && root.activeFocus && saveThresholds.enabled
+                             && !(controls.view.manual && controls.view.keyboard)
+                    onActivated: saveThresholds.clicked()
+                }
                 Button {text:"Отменить";enabled:visionTuning.view.dirty && !visionTuning.view.busy;onClicked:visionTuning.discard();ToolTip.visible:hovered;ToolTip.text:"Отменить черновики всех цветов"}
                 Item {Layout.fillWidth:true}
                 Button {text:"Сбросить…";enabled:!visionTuning.view.busy && profile.count>0;onClicked:reset.open()}
