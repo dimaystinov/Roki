@@ -656,9 +656,11 @@ class GameAdapter:
                 while self.world.data.time < finish:
                     await self.world.wait_frame(.02)
         elif op in ("game.jump", "game.walk"):
-            if (op == "game.walk" and self.football_body and self.football_body.pose == "crouch"
-                    and not args.get("keep_crouch")):
-                await self._body_motion("motion.pose", {"name": "base_stand"})
+            if op == "game.walk" and self.football_body:
+                pose = self.football_body.pose
+                if pose != "base_stand" and not (pose == "crouch" and args.get("keep_crouch")):
+                    await self._imu()  # A fallen player must recover before preparing a walk.
+                    await self._body_motion("motion.pose", {"name": "base_stand"})
             await self._body_motion(op, args)
         elif op in ("motion.kick", "motion.pose", "motion.splits"):
             await self._body_motion(op, args)

@@ -49,6 +49,27 @@ class SimRoki2Tests(unittest.TestCase):
         self.assertFalse(fallen)
         self.assertAlmostEqual(sim.wrap(measured - world.yaw), math.radians(30.002))
 
+    def test_restart_walk_prepares_only_if_stance_requires_it(self):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, Mock, call
+        for pose, keep, prepare in (("stand", False, True), ("crouch_centered", True, True),
+                                    ("crouch", True, False), ("base_stand", False, False)):
+            with self.subTest(pose=pose, keep=keep):
+                game = object.__new__(sim.GameAdapter)
+                game.football_body = SimpleNamespace(pose=pose)
+                game._body_motion, game._imu = AsyncMock(), AsyncMock()
+                game._refresh_imu = Mock()
+                args = {"kind": "omni", "keep_crouch": keep}
+                asyncio.run(game._move("game.walk", args))
+                expected = [call("motion.pose", {"name": "base_stand"})] if prepare else []
+                self.assertEqual(game._body_motion.await_args_list, expected + [call("game.walk", args)])
+        game.football_body.pose = "stand"
+        game._body_motion.reset_mock()
+        game._imu.side_effect = sim.Fault("fallen", "Body is on its back")
+        with self.assertRaises(sim.Fault):
+            asyncio.run(game._move("game.walk", args))
+        game._body_motion.assert_not_awaited()
+
     def test_match_retries_fallen_player_without_resuming_strategy(self):
         from unittest.mock import AsyncMock, Mock
         game = object.__new__(sim.GameAdapter)
