@@ -117,3 +117,16 @@ def test_pursuing_visitor_sidesteps_behind_ball(tmp_path, side):
     assert op == 'game.walk'
     assert payload['course'] == pytest.approx(side*math.pi/2)
     assert 0 < payload['distance_m'] <= .14
+
+
+@pytest.mark.parametrize("foot_y,aligned,expected", [(.052, True, True), (.052, False, False),
+                                                       (-.052, True, False)])
+def test_open_play_uses_visually_confirmed_left_toe(tmp_path, foot_y, aligned, expected):
+    strategy, game = harness(tmp_path, goals=[])
+    strategy.opening_touch_required = False
+    strategy.attack_axis = 0.
+    strategy.last_scene = dict(confirmed=True, received=time.monotonic(),
+                               foot=dict(leg="left", aligned=aligned, gap_ratio=.18))
+    asyncio.run(strategy.attack_after_pass((.115, foot_y), [], rechecked=True))
+    legs = [args["leg"] for op, args in commands(game) if op == "motion.kick"]
+    assert legs == (["left"] if expected else [])

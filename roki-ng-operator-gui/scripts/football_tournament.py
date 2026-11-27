@@ -88,6 +88,8 @@ def run(row, directory, profile, visible=False):
             outcome = asyncio.run(match.run(300.-elapsed, visible, title=title, viewer=viewer))
             if outcome == 'closed':
                 raise SystemExit("Viewer closed before final whistle")
+            for prefix, bounds in match.keeper_foot_limits.items():
+                match.events.append([match.data.time, prefix.rstrip('_'), 'feet_extent_xy', bounds.tolist()])
             events.extend([round(elapsed+t,3), *event] for t,*event in match.events)
             trace.extend(s | {'time': round(elapsed+s['time'],3)} for s in match.trace)
             elapsed += match.data.time

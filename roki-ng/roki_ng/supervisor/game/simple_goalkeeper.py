@@ -26,6 +26,19 @@ class SimpleGoalkeeper(SimpleFootball):
         self.search_view = 0
         self.last_close_pan = None
         self.ball_side = -1
+        own = self.specs[self.p['match.own_goal']]
+        enemy = self.specs[1 - self.p['match.own_goal']]
+        self.inward = 1 if enemy['x'] > own['x'] else -1
+        fronts = [m for key, m in self.p.items() if key.startswith('field.mark.')
+                  and m['enabled'] and m['kind'] == 'line'
+                  and abs(math.cos(m['angle'])) < .12 and abs(m['y'] - own['y']) < .07
+                  and m['size'] >= own['width'] * .9
+                  and .08 < self.inward * (m['x'] - own['x']) < .8]
+        front = min(fronts, key=lambda m: abs(m['x'] - own['x'])) if fronts else None
+        self.area_depth = abs(front['x'] - own['x']) if front else .30
+        self.area_half_width = front['size'] / 2 if front else own['width'] / 2
+        self.area_y = front['y'] if front else own['y']
+
 
     async def find_near_ball(self, revision):
         # y is positive to body-left. The servo sign belongs to the camera mount.
@@ -108,7 +121,36 @@ class SimpleGoalkeeper(SimpleFootball):
             if time.monotonic() >= self.track_deadline:
                 self.describe('keeper_hold', 'ball expired before lateral jump; reobserve')
                 return False
-        return True
+        dx = dy = 0.
+        reach_y = .11  # Both feet plus lateral swing in normal stance.
+        if op == 'game.walk':
+            distance, course = args['distance_m'], args['course']
+            dx, dy = distance * math.cos(course), distance * math.sin(course)
+        elif op == 'game.jump' and args['direction'] in ('left', 'right'):
+            side = args['direction']
+            dy = self.p[f'motion.jump_{side}_mm'] * args['fraction'] / 1000
+            dy *= 1 if side == 'left' else -1
+        elif op == 'motion.kick':
+            dx = .08  # Forward excursion in addition to the standing foot envelope.
+        elif op == 'motion.splits':
+            reach_y = .26
+        else:
+            return True
+        odom = getattr(self.g, 'odometry', None)
+        if odom is None or odom.confidence == 'degraded':
+            self.describe('keeper_boundary', 'position uncertain; watch ball from here')
+            return False
+        own = self.specs[self.p['match.own_goal']]
+        x, y = odom.field_point((dx, dy))
+        depth = self.inward * (x - own['x'])
+        # Side-stepping also accumulates fore/aft slip. Reserve space for the
+        # feet and for travel since the last independent position correction.
+        slip = min(.08, .12 * max(0., odom.path - odom.anchor_path))
+        if (.045 <= depth <= self.area_depth - .075 - slip and
+                abs(y - self.area_y) <= self.area_half_width - reach_y - slip):
+            return True
+        self.describe('keeper_boundary', 'projected movement reaches goal-area marking')
+        return False
 
     def cancel_special(self, reason):
         super().cancel_special(reason)

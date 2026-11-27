@@ -1083,3 +1083,24 @@ def test_final_keeper_recheck_is_single_and_requires_fresh_toe(tmp_path, age, lo
         asyncio.run(s.attack_after_pass(ball, []))
         assert s.look.await_count == 1
     assert [op for op,_ in commands(g)] == ['motion.kick']
+
+
+def test_lost_close_ball_searches_for_rebound_on_last_seen_side(tmp_path):
+    strategy, game = harness(tmp_path, ball=None, delay=0)
+    strategy.kickoff_pending = strategy.opening_touch_required = False
+    strategy.near = True
+    strategy.last_ball_side = -1
+    strategy.empty_sectors = 1
+    strategy.expected_pan = lambda name: 450
+    strategy.look = AsyncMock(return_value=None)
+    strategy.search_sector = AsyncMock()
+    asyncio.run(strategy.step())
+    calls = strategy.look.await_args_list
+    assert calls[0].args[0] == 450 and calls[0].kwargs['wait_ball']
+    shallow = min(0, strategy.p['head.field_tilt'] + 650)
+    side_pan = round(-1100 / game.s.params.backend.Robot.camera.pan_sign)
+    assert [c.args for c in calls if c.args[1] == shallow] == [
+        (side_pan, shallow), (-side_pan, shallow)]
+    assert all(not c.kwargs['wait_ball'] for c in calls[1:])
+    strategy.search_sector.assert_awaited_once()
+    assert not commands(game)

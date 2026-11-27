@@ -793,15 +793,23 @@ class SimpleFootball:
         if visual_aim:
             target = self.keeper_aim[0]
             map_tolerance = None
-        leg = 'right'  # The right toe has a measured reach on this robot.
+        # As in Roki_2_Soccer, use the foot on the observed side. Only the
+        # right foot has a measured metric window, so a left strike needs
+        # visual confirmation at the toe as well as a left-sided ball.
+        foot = scene.get('foot')
+        visible_reach = bool(foot and foot['aligned'] and -.05 <= foot['gap_ratio'] <= .4)
+        use_left = (not self.opening_touch_required and visible_reach and
+                    foot['leg'] == 'left' and y > .020 and distance <= .22)
+        leg = 'left' if use_left else 'right'
         offset = self.p['game.kick_offset_mm']/1000
         toe = self.p['game.soft_kick.right.toe_x_mm']/1000
-        foot = scene.get('foot')
-        ready = (foot['leg'] == leg and foot['aligned'] and -.05 <= foot['gap_ratio'] <= .4
+        if use_left:
+            offset = -offset
+        ready = (foot['leg'] == leg and visible_reach
                  if foot else toe > 0 and -.01 <= x-radius-toe <= .04 and abs(y+offset) <= .024)
         # Both estimates come from this camera frame. A partially obscured toe
         # can miss the dark tip even with the ball inside its measured reach.
-        calibrated = (toe > 0 and -.012 <= x-radius-toe <= .04 and abs(y+offset) <= .027)
+        calibrated = (leg == 'right' and toe > 0 and -.012 <= x-radius-toe <= .04 and abs(y+offset) <= .027)
         ready |= calibrated and (not foot or foot['leg'] == leg)
         if distance <= .22 and ready and self.keeper_aim and not visual_aim and not self.final_keeper_check:
             # Do this even when odometry supplies a plausible fallback course.
@@ -924,7 +932,7 @@ class SimpleFootball:
             return
         travel = math.hypot(dx, dy)
         self.near = distance < .32
-        self.describe('simple_attack_walk', f'place right foot behind ball; range={distance:.3f}m')
+        self.describe('simple_attack_walk', f'place {leg} foot behind ball; range={distance:.3f}m')
         imu = self.gaze_imu()
         if distance > .35 and imu:
             region = self.expected_gaze.ball_region(yaw, imu[1], time.monotonic(), lead=.30)
@@ -1310,8 +1318,17 @@ class SimpleFootball:
                     poses[:0] = [(max(-2666, min(2666, edge)), tilt) for edge in edges]
                 if abs(predicted) > 250:
                     poses.insert(0, (predicted, tilt))
+            # A missed close view can mean the ball rolled out of the foot camera.
+            # Inspect the same side farther out before rotating the body again.
+            if self.near and self.empty_sectors and not self.opening_touch_required:
+                shallow = min(0, self.p['head.field_tilt'] + 650)
+                poses.extend((round(1100 * side / sign), shallow)
+                             for side in (self.last_ball_side, -self.last_ball_side))
             for pan, tilt in dict.fromkeys(poses):
-                scene = await self.look(pan, tilt, wait_ball=True)
+                # Give a predicted ball time to reappear behind an obstacle.
+                # Elsewhere a confirmed empty observation suffices to move on.
+                dwell = self.opening_touch_required or self.empty_sectors == 0 or pan == predicted
+                scene = await self.look(pan, tilt, wait_ball=dwell)
                 if not self.g._same_plan(revision) or self.expired():
                     return
                 if scene and scene.get('ball'):

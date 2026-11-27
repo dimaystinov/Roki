@@ -238,6 +238,14 @@ class Match:
         mujoco.mj_forward(m, self.data)
         self.referee = PitchReferee(m, self.data, self.settings['layout'],
                                    {'torso_1': 'yellow', 'keeper_torso_1': 'blue', 'visitor_torso_1': 'blue', 'ally_keeper_torso_1': 'yellow'})
+        self.keeper_foot_geoms = {}
+        self.keeper_foot_limits = {}
+        for prefix in ('keeper_', 'ally_keeper_'):
+            feet = [m.joint(prefix + side + '_ankle_roll_joint').bodyid.item()
+                    for side in ('left', 'right')]
+            ids = np.flatnonzero(np.isin(m.geom_bodyid, feet) & ((m.geom_contype | m.geom_conaffinity) != 0))
+            self.keeper_foot_geoms[prefix] = ids
+            self.keeper_foot_limits[prefix] = np.array([[np.inf, np.inf], [-np.inf, -np.inf]])
         self.waiters = []
 
     async def sleep(self, seconds):
@@ -278,6 +286,14 @@ class Match:
                 print(f"MATCH {self.events[-1]}", flush=True)
                 return
             await self.sleep(.02)
+
+    def keeper_feet_bounds(self, prefix):
+        ids = self.keeper_foot_geoms[prefix]
+        boxes = self.model.geom_aabb[ids]
+        rot = self.data.geom_xmat[ids].reshape(-1, 3, 3)[:, :2, :]
+        centers = self.data.geom_xpos[ids, :2] + (rot @ boxes[:, :3, None])[:, :, 0]
+        radii = (np.abs(rot) @ boxes[:, 3:, None])[:, :, 0]
+        return np.stack(((centers - radii).min(axis=0), (centers + radii).max(axis=0)))
 
     def advance(self):
         move_spectators(self.data, self.spectators, self.settings["layout"], self.data.time)
@@ -392,6 +408,11 @@ class Match:
                 while self.data.time < seconds and (not window or window.is_running()):
                     before = time.perf_counter()
                     self.advance()
+                    if self.record:
+                        for prefix, limits in self.keeper_foot_limits.items():
+                            bounds = self.keeper_feet_bounds(prefix)
+                            limits[0] = np.minimum(limits[0], bounds[0])
+                            limits[1] = np.maximum(limits[1], bounds[1])
                     if self.record and self.data.time >= self.next_sample:
                         sample = {"time": round(self.data.time,3), "ball": list(self.ball[:3]), "players": {}}
                         for world,game,strategy,_ in self.players:
@@ -403,6 +424,8 @@ class Match:
                                 recovery_attempt=getattr(game, 'recovery_attempt', 0),
                                 imu_yaw_rad=game.measured_yaw, actual=[world.x,world.y,world.yaw], estimate=game.odometry.state(),
                                 ball=scene.get("ball"), features=[p["kind"] for p in scene.get("parts",[])])
+                            if world.prefix in self.keeper_foot_geoms:
+                                sample["players"][name]["feet_bounds_xy"] = self.keeper_feet_bounds(world.prefix).tolist()
                         self.trace.append(sample)
                         self.next_sample += .25
                     for wake, future in self.waiters:

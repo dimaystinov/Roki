@@ -17,6 +17,8 @@ def keeper(tmp_path, ball=(.4, .2)):
         _call=AsyncMock(return_value={}), _move=AsyncMock(return_value=True),
         s=SimpleNamespace(log=lambda *a: None))
     k = SimpleGoalkeeper(g, Parameters(tmp_path).values, 'goalkeeper', 0)
+    from roki_ng.body.motion.odometry import GameOdometry
+    g.odometry = GameOdometry(k.p, 'goalkeeper', 0.)
     k.look = AsyncMock(return_value={'ball': ball, 'parts': [], 'received': time.monotonic()})
     return k, g
 
@@ -152,7 +154,6 @@ def test_new_role_has_no_odometry_or_entry(tmp_path):
 def test_keeper_walks_laterally_to_cover_visible_offset(tmp_path, offset):
     import math
     k, g = keeper(tmp_path, (.65, offset))
-    g.odometry = SimpleNamespace(field_point=lambda point: point)
     asyncio.run(k.step())
     op, args = g._move.await_args.args
     assert op == 'game.walk'
@@ -217,3 +218,30 @@ def test_keeper_finds_ball_at_side_and_clears(tmp_path, side, leg):
     assert asyncio.run(k.clear_at_foot(scene, ball, 0.))
     assert k.move.await_args.args == ('motion.kick', dict(leg=leg,power=80,offset=0))
     assert not asyncio.run(k.clear_at_foot(scene, (.36,ball[1]), 0.))
+
+
+@pytest.mark.parametrize('own', [0, 1])
+@pytest.mark.parametrize('side', [-1, 1])
+def test_keeper_checks_goal_area_before_fallback_jump_and_split(tmp_path, own, side):
+    from roki_ng.body.motion.odometry import GameOdometry
+
+    k, game = keeper(tmp_path)
+    p = k.p | {'match.own_goal': own}
+    goal = p[f'field.goal.{own}']
+    inward = 1 if goal['x'] < 0 else -1
+    p['field.mark.00'] = dict(enabled=True, kind='line', x=goal['x'] + inward*.30,
+                              y=0., size=1.20, angle=1.5707963)
+    k = SimpleGoalkeeper(game, p, 'goalkeeper', 0)
+    odom = game.odometry = GameOdometry(p, 'goalkeeper', 0.)
+    odom.y = side * .485
+    k.track_deadline = time.monotonic() + 1
+    out = 'left' if side * inward > 0 else 'right'
+    back = 'right' if out == 'left' else 'left'
+    assert not k.motion_fresh('game.jump', dict(direction=out, fraction=1.))
+    assert k.motion_fresh('game.jump', dict(direction=back, fraction=1.))
+    assert not k.motion_fresh('motion.splits', {})
+    odom.y = 0.
+    assert k.motion_fresh('motion.splits', {})
+    assert not k.motion_fresh('game.walk', dict(distance_m=.12, course=0.))
+    odom.uncertain('fallen')
+    assert not k.motion_fresh('game.jump', dict(direction=out, fraction=1.))
