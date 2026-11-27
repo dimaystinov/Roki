@@ -48,7 +48,8 @@ from roki_ng.body.motion.engine import Engine
 from roki_ng.body.motion.gait import Servo
 from roki_ng.localisation.filter import PoseFilter
 from roki_ng.localisation.pipeline import process_frame
-from tests.fake_robot import FakeRobot
+from tests.fake_robot import FakeRobot, video_output
+from sim_detection import SimDetection
 from sim_visual_dribble import VisualDribble
 from sim_referee import GOAL_CLEAR_HEIGHT, PitchReferee, painted_limits
 from sim_scene import apply_settings, load_settings, soccer_model, opposing_start
@@ -691,8 +692,9 @@ class GameAdapter:
         self.scene = self.tracker.update(scene)
         return self.scene
 
-    def observe_ball(self):
-        image = self.world.render()
+    def observe_ball(self, image=None, *, debug=None):
+        if image is None:
+            image = self.world.render()
         projector = self.world.projector
         geometry = camera_geometry(self.p, self.world.pan, self.world.tilt, backend.Robot.camera)
         camera = self.world.data.camera("sim_head_camera")
@@ -703,7 +705,7 @@ class GameAdapter:
         heading = yaw + geometry["pan"]
         c, s = math.cos(heading), math.sin(heading)
         projector.camera_rotation = np.array([[c,s,0],[-s,c,0],[0,0,1]]) @ camera.xmat.reshape(3,3)
-        ball = ball_candidates(image, self.p, projector, None, camera_height=geometry["height"])
+        ball = ball_candidates(image, self.p, projector, None, camera_height=geometry["height"], debug=debug)
         point = None
         if ball:
             try:
@@ -728,7 +730,8 @@ class SimRobot(FakeRobot):
         self.calibration = world.calibration = CalibrationSession(world)
         self.repeat_fixture = self.switching_scene = False
         self.strategy_task = self.loop = None
-        self.pipeline = self.appsrc = None
+        self.outputs = {}
+        self.diagnostic = SimDetection(game)
         self.motion_queue = queue.SimpleQueue()
         self.manual_task = None
         self.manual_job_id = None
@@ -737,6 +740,20 @@ class SimRobot(FakeRobot):
         self.game_running = False
         self.mode = "IDLE"
         self.streams["camera"]["settings"]["fps"] = 15.
+        self.streams["detection"] = video_output("detection")
+        self.streams["detection"]["title"] = "Диагностика LAB / мяча"
+        self.streams["detection"]["settings"].update(fps=5., max_fps=5.)
+
+    def video_availability(self):
+        return super().video_availability() | {"detection": self.diagnostic.running}
+
+    def stop_output(self, name):
+        output = self.outputs.pop(name, None)
+        if output:
+            output[0].set_state(self.Gst.State.NULL)
+        self.streams[name].update(state="stopped", subscribed=False, receivers=0,
+                                  producer=dict(requested=False, publishing=False))
+
 
     def game_state(self):
         state = super().game_state()
@@ -820,6 +837,21 @@ class SimRobot(FakeRobot):
 
     def _command(self, op, body):
         session = self.calibration
+        if op.startswith("detection."):
+            if op not in ("detection.list", "detection.status"):
+                self._require_control()
+            if op == "detection.stop":
+                self.stop_output("detection")
+            return self.diagnostic.command(op, body, self)
+        if op == "camera.stop":
+            self._require_control()
+            self.diagnostic.stop()
+            for name in ("camera", "detection"):
+                self.stop_output(name)
+        if op == "camera.start" and "stream" in self.outputs:
+            raise Fault("busy", "Stop direct-gst before starting capture")
+        if op == "videostream.subscribe" and not self.video_availability().get(body.get("name"), False):
+            raise Fault("not_ready", "Start the requested video producer first")
         if op == "sim.calibration.status":
             return session.state()
         if op == "sim.kick.preview":
@@ -890,6 +922,8 @@ class SimRobot(FakeRobot):
                 raise Fault("conflict", "Reload changed parameters")
             saved = self.store.set_many(values)
             self.game.p.update(saved)
+            if any(key.startswith("vision.") for key in saved):
+                self.diagnostic.invalidate()
             if "values" in body:
                 return {"values": saved}
             key = body["key"]
@@ -968,9 +1002,9 @@ class SimRobot(FakeRobot):
                     "next_offset": end if end < len(names) else None}
         result = super()._result(op, body)
         if op == "videostream.subscribe":
-            self._start_video(body["rtp_port"], result["ssrc"])
+            self._start_video(body["name"], body["rtp_port"], result["ssrc"])
         elif op in ("videostream.unsubscribe", "videostream.stop"):
-            self._stop_video()
+            self.stop_output(body["name"])
         elif op == "motion.head":
             self.motion_queue.put((op, body, None))
         elif op in ("motion.jump", "motion.kick", "motion.pose", "motion.slot",
@@ -1076,37 +1110,37 @@ class SimRobot(FakeRobot):
         if self.manual_task is None and self.live_drive():
             self.manual_task = asyncio.create_task(self.drive_cycles())
 
-    def _start_video(self, port, ssrc):
-        self._stop_video()
+    def _start_video(self, name, port, ssrc):
+        old = self.outputs.pop(name, None)
+        if old:
+            old[0].set_state(self.Gst.State.NULL)
+        fps = 5 if name == "detection" else 15
         launch = (
             "appsrc name=source is-live=true format=time do-timestamp=true "
-            "caps=video/x-raw,format=RGB,width=800,height=650,framerate=15/1 "
+            f"caps=video/x-raw,format=BGR,width=800,height=650,framerate={fps}/1 "
             "! videoconvert ! x264enc tune=zerolatency speed-preset=ultrafast "
             "bitrate=2000 key-int-max=15 ! h264parse "
             f"! rtph264pay pt=96 config-interval=1 ssrc={ssrc} "
             f"! udpsink host=127.0.0.1 port={port} sync=false")
-        self.pipeline = self.Gst.parse_launch(launch)
-        self.appsrc = self.pipeline.get_by_name("source")
-        self.pipeline.set_state(self.Gst.State.PLAYING)
-
-    def _stop_video(self):
-        if self.pipeline:
-            self.pipeline.set_state(self.Gst.State.NULL)
-        self.pipeline = self.appsrc = None
+        pipeline = self.Gst.parse_launch(launch)
+        pipeline.set_state(self.Gst.State.PLAYING)
+        self.outputs[name] = (pipeline, pipeline.get_by_name("source"))
 
     def push_frame(self, bgr):
-        if self.appsrc is None:
-            return
-        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-        payload = rgb.tobytes()
-        buffer = self.Gst.Buffer.new_allocate(None, len(payload), None)
-        buffer.fill(0, payload)
-        self.appsrc.emit("push-buffer", buffer)
+        diagnostic_frame = self.diagnostic.process(bgr, "detection" in self.outputs)
+        for name, (_, source) in self.outputs.items():
+            frame = diagnostic_frame if name == "detection" else bgr
+            if frame is not None:
+                payload = frame.tobytes()
+                buffer = self.Gst.Buffer.new_allocate(None, len(payload), None)
+                buffer.fill(0, payload)
+                source.emit("push-buffer", buffer)
 
     def close(self):
         if self.manual_task is not None and not self.manual_task.done():
             self.manual_task.cancel()
-        self._stop_video()
+        for name in list(self.outputs):
+            self.stop_output(name)
         super().close()
 
 
@@ -1228,7 +1262,7 @@ async def run(port, steps=None, viewer=True, settings_path=SETTINGS, trace_path=
                 await asyncio.gather(active, return_exceptions=True)
                 active = robot.strategy_task = None
             now = time.monotonic()
-            if now-last_video >= 1/15 and (robot.appsrc is not None or not robot.calibration.enabled):
+            if now-last_video >= 1/15 and (robot.outputs or robot.diagnostic.running or not robot.calibration.enabled):
                 frame = world.render()
                 robot.push_frame(frame)
                 last_video = now

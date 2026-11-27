@@ -152,6 +152,10 @@ class FakeRobot:
             except Exception as exc:
                 self.errors.append(repr(exc))
 
+    def video_availability(self):
+        return dict(stream=not self.camera_running, camera=self.camera_running,
+                    localisation=self.localisation_running)
+
     def on_drive(self, body):
         """Hook used by the local MuJoCo robot; fixtures ignore drive samples."""
 
@@ -245,8 +249,7 @@ class FakeRobot:
             start, limit = body.get("offset", 0), body.get("limit", 12)
             return dict(items=items[start:start+limit], next_offset=start+limit if start+limit<len(items) else None)
         if op.startswith("videostream."):
-            available = dict(stream=not self.camera_running, camera=self.camera_running,
-                             localisation=self.localisation_running)
+            available = self.video_availability()
             for name, item in self.streams.items():
                 item["available"] = available.get(name, True)
                 item["reason"] = "" if item["available"] else "producer_unavailable"
