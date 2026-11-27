@@ -1,4 +1,5 @@
 """Use the local macOS KDDockWidgets build without loading Linux ELF plugins."""
+import os
 import ctypes
 import sys
 from pathlib import Path
@@ -6,12 +7,13 @@ from pathlib import Path
 from PySide6.QtCore import qVersion
 
 _library=None
+_dll_directory=None
 
 
 def configure(engine,root):
-    global _library
+    global _library, _dll_directory
     frozen = getattr(sys, 'frozen', False)
-    if not frozen and sys.platform!='darwin':
+    if not frozen and sys.platform not in ('darwin', 'win32'):
         engine.addImportPath(str(root/'native/qml'))
         return
     from shiboken6 import getCppPointer
@@ -19,11 +21,17 @@ def configure(engine,root):
         directory = Path(sys._MEIPASS)/'docking'
         library = directory/('libroki_docking_bootstrap.dylib' if sys.platform == 'darwin' else 'roki_docking_bootstrap.dll')
         version_file = directory/'qt-version.txt'
+    elif sys.platform == 'win32':
+        directory = root/'.deps/windows'
+        library = directory/'bootstrap/roki_docking_bootstrap.dll'
+        version_file = directory/'qt-version.txt'
+        if library.exists():
+            _dll_directory = os.add_dll_directory(str(directory/'install/bin'))
     else:
         library=root/'.deps/macos/bootstrap/libroki_docking_bootstrap.dylib'
         version_file=root/'.deps/macos/qt-version.txt'
     if not library.exists():
-        raise RuntimeError('Build the macOS dependency with scripts/build_macos.sh first')
+        raise RuntimeError(f'Missing docking library: {library}. See platform setup in README.md.')
     if not version_file.exists() or version_file.read_text().strip()!=qVersion():
         raise RuntimeError('Qt build mismatch; use scripts/build_macos.sh and scripts/run_macos.sh')
     _library=ctypes.CDLL(str(library))

@@ -4,7 +4,33 @@ Roki FPV — пульт оператора для камеры, параметр
 
 **[Скачать выпуск для macOS и Windows](https://github.com/dimaystinov/Roki/releases/tag/fpv-calibration-2026.11.26)** · **[Статья о 20 калибровках](docs/calibration/Инструкция-по-калибровке.md)** · **[Видео MP4 с русской озвучкой, 8 мин 7 с](https://github.com/dimaystinov/Roki/releases/download/fpv-calibration-2026.11.26/Roki-Calibration-RU.mp4)**
 
-## Запустить готовый пульт
+## Обновляемый Roki FPV для macOS и Windows
+
+Оба ярлыка в корне репозитория запускают `roki-ng-operator-gui/roki_operator.py`. Окно загружает QML и Python-модули из этого же каталога. Для установки скачайте исходники командой `git clone https://github.com/dimaystinov/Roki.git`.
+
+**macOS.** В каталоге `Roki/roki-ng-operator-gui` один раз подготовьте Qt, модуль стыковки панелей и видео.
+
+```bash
+brew install python@3.11 qt cmake ninja pkg-config
+bash scripts/build_macos.sh
+bash scripts/install_gstreamer_macos.sh
+```
+
+Для обычного запуска откройте **Roki FPV.command** в корне репозитория.
+
+**Windows x64.** Установите Miniforge и Visual Studio 2022 с инструментами C++ x64. В Developer PowerShell с доступной командой conda, из каталога `Roki/roki-ng-operator-gui`, один раз выполните:
+
+```powershell
+conda env create -f packaging/windows-environment.yml
+conda activate fpv-roki-build
+./packaging/build_windows.ps1 -NativeOnly
+```
+
+Для обычного запуска откройте **Roki FPV.cmd**. При нестандартном расположении Miniforge запустите ярлык из Miniforge Prompt. Для ярлыка на рабочем столе создайте ссылку на командный файл в папке репозитория.
+
+**Обновление.** Закройте FPV, выполните `git pull --ff-only` в клоне ветки `main` и снова откройте тот же ярлык. Изменения Python и QML применяются при запуске. При изменении версии Qt или нативного модуля повторите подготовку зависимостей для своей системы.
+
+## Архивные автономные сборки
 
 | Платформа | Установка и запуск |
 |---|---|

@@ -2,11 +2,18 @@
 """Start the operator shell. No connection or robot action is automatic."""
 
 import argparse
+import os
 from pathlib import Path
 import signal
 import sys
 
-from PySide6.QtCore import QStandardPaths, QUrl
+if sys.platform == "win32":
+    os.environ.setdefault("QV4_FORCE_INTERPRETER", "1")
+    os.environ.setdefault("QML_DISABLE_DISK_CACHE", "1")
+    os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Fusion")
+    os.environ.setdefault("QT_QUICK_BACKEND", "software")
+
+from PySide6.QtCore import QStandardPaths, QTimer, QUrl
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuick import QQuickWindow, QSGRendererInterface
@@ -53,6 +60,7 @@ def run_operator():
     parser.add_argument("--robot", default="172.30.0.1", help="Pre-fill IPv4; does not connect")
     parser.add_argument("--port", type=int, default=8093)
     parser.add_argument("--config-dir", type=Path, help="Override layout storage for testing")
+    parser.add_argument("--check-gui", action="store_true", help="Open the operator window and exit")
     args = parser.parse_args()
     app = QGuiApplication([sys.argv[0]])
     configure_appearance(app)
@@ -75,6 +83,8 @@ def run_operator():
     if not engine.rootObjects():
         controller.shutdown()
         return 1
+    if args.check_gui:
+        QTimer.singleShot(500, app.quit)
     app.aboutToQuit.connect(controller.shutdown)
     try:
         return app.exec()
