@@ -26,6 +26,7 @@ def main():
         engine = QQmlApplicationEngine()
         engine.addImageProvider('streams', VideoImageProvider(backend.streams))
         engine.rootContext().setContextProperty('game', backend.game)
+        engine.rootContext().setContextProperty('controls', backend.control)
         engine.rootContext().setContextProperty('backend', backend)
         engine.rootContext().setContextProperty('fieldEditor', backend.field_editor)
         engine.rootContext().setContextProperty('streams', backend.streams)
@@ -71,9 +72,11 @@ def main():
             wait_until(lambda: not backend.game.pending)
             backend.game.refresh()
             wait_until(lambda: not backend.game.view['running'])
+            robot.mode = 'IDLE'
             backend.control.acquire()
-            wait_until(lambda: backend.control.owns)
-            backend.control.enterManual()
+            wait_until(lambda: backend.control.owns and backend.control.mode == 'IDLE')
+            assert item('gameEnterManual').property('enabled')
+            QMetaObject.invokeMethod(item('gameEnterManual'), 'clicked')
             wait_until(lambda: backend.control.mode == 'MANUAL' and not backend.control.pending)
             robot.game_running = False
             assert item('gameStart').property('enabled')

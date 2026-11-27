@@ -85,6 +85,13 @@ ScrollView {
         }
         Flow {
             Layout.fillWidth: true; spacing: 6
+            Button {
+                objectName: "gameEnterManual"
+                text: "Включить ручной режим"
+                visible: controls.view.owns && controls.view.mode === "IDLE" && !game.view.running
+                enabled: controls.view.canEnterManual
+                onClicked: controls.enterManual()
+            }
             Button { objectName: "gameStart"; text: game.view.pickupReady ? "Повторный ввод" : "Запустить игру"; enabled: game.view.canStart; onClicked: game.start(role.currentText, entry.currentText, delay.value, ["straight", "left", "right", "kickoff_left"][kickDirection.currentIndex]) }
             Button { objectName: "gamePause"; text: "Пауза"; enabled: game.view.canPause; onClicked: game.pause() }
             Button { objectName: "gameResume"; text: "Продолжить"; enabled: game.view.canResume; onClicked: game.resume() }

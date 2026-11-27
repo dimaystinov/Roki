@@ -50,6 +50,8 @@ class Game(QObject):
                     blocked += ' Для остановки получите управление.'
             else:
                 blocked = 'Робот в режиме GAME. Нажмите «Запросить статус», чтобы узнать состояние игры.'
+        if self.control.mode == 'IDLE' and self.control.view['canEnterManual']:
+            blocked = 'Для запуска игры включите ручной режим, выберите роль и нажмите «Запустить игру».'
         if self.calibration_enabled:
             blocked = 'Для запуска игры выберите «Футбол» на вкладке «Тесты».'
         setup = self.state.get('kick_setup') if fresh and running and not paused and not pickup else None
