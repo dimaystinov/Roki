@@ -177,3 +177,33 @@ def test_viewer_wall_time_does_not_break_imu_continuity(simulator):
         world.data.time += .2
         imu.poll(hardware)
         assert imu.yaw_epoch == epoch + 1
+
+
+def test_colour_diagnostics_use_rendered_frame_and_saved_profile(simulator):
+    import numpy as np
+
+    robot = simulator
+    robot.mode = "MANUAL"
+    profiles = robot._result("detection.list", {})["profiles"]
+    assert {"orange_ball", "green_field"} <= set(profiles)
+    with pytest.raises(sim.Fault, match="Start runtime camera"):
+        robot._result("detection.start", {})
+    robot._result("camera.start", {})
+    robot._result("detection.start", {"profile": "orange_ball"})
+    frame = np.full((650, 800, 3), (0, 120, 255), np.uint8)
+    robot.push_frame(frame)
+    status = robot._result("detection.status", {})
+    assert status["frames"] == 1 and status["result"]["profile"] == "orange_ball"
+    assert not status["video"]["requested"]
+    robot._result("detection.select", {"profile": "green_field"})
+    output = robot.diagnostic.process(frame, True)
+    assert output.shape == frame.shape and not np.array_equal(output, frame)
+    assert robot.diagnostic.result["profile"] == "green_field"
+    key = "vision.green_field.pixels_min"
+    new_min = robot.store.values[key] + 1
+    robot._result("params.set", {"values": {key: new_min}})
+    assert robot.diagnostic.result is None
+    assert robot._result("params.get", {"keys": [key]})["values"][key] == new_min
+    robot._result("camera.stop", {})
+    assert not robot._result("detection.status", {})["running"]
+    assert not robot.video_availability()["detection"]
