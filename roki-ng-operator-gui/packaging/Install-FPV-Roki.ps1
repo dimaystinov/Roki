@@ -13,7 +13,7 @@ $Shortcut.WorkingDirectory = $Destination
 $Shortcut.Save()
 Write-Host "Installed: $Destination"
 
-foreach ($Entry in @(@('Operator NG — Updater', '--upstream-updater'), @('Operator NG — Yagubov', '--upstream-run'))) {
+foreach ($Entry in @(@('Operator NG - Updater', '--upstream-updater'), @('Operator NG - Yagubov', '--upstream-run'))) {
     $Link = $Shell.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Programs')) ($Entry[0] + '.lnk')))
     $Link.TargetPath = Join-Path $Destination 'FPV Roki.exe'
     $Link.Arguments = $Entry[1]
