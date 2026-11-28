@@ -1,0 +1,57 @@
+name: Attach verified Windows release build
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful FPV Windows workflow run ID
+        required: true
+      release_id:
+        description: Existing draft release ID
+        required: true
+permissions:
+  actions: read
+  contents: write
+jobs:
+  attach:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Verify build and release
+        uses: actions/github-script@v7
+        env:
+          BUILD_RUN_ID: ${{ inputs.run_id }}
+          RELEASE_ID: ${{ inputs.release_id }}
+        with:
+          script: |
+            const {owner, repo} = context.repo;
+            const run_id = Number(process.env.BUILD_RUN_ID);
+            const release_id = Number(process.env.RELEASE_ID);
+            if (!Number.isSafeInteger(run_id) || !Number.isSafeInteger(release_id)) throw new Error('Invalid IDs');
+            const {data: run} = await github.rest.actions.getWorkflowRun({owner, repo, run_id});
+            const {data: release} = await github.rest.repos.getRelease({owner, repo, release_id});
+            if (run.conclusion !== 'success' || run.path !== '.github/workflows/fpv-windows.yml') throw new Error('Expected successful FPV build');
+            if (!release.draft || release.target_commitish !== run.head_sha) throw new Error('Release must be a draft targeting the exact tested commit');
+            if (release.assets.some(a => a.name === 'FPV-Roki-windows-x64.zip')) throw new Error('Asset already exists; refusing overwrite');
+      - uses: actions/download-artifact@v4
+        with:
+          name: FPV-Roki-windows-x64
+          path: package
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+      - name: Attach Windows archive
+        uses: actions/github-script@v7
+        env:
+          RELEASE_ID: ${{ inputs.release_id }}
+        with:
+          script: |
+            const fs = require('fs');
+            const crypto = require('crypto');
+            const name = 'FPV-Roki-windows-x64.zip';
+            const data = fs.readFileSync('package/' + name);
+            const sha = crypto.createHash('sha256').update(data).digest('hex');
+            const {data: asset} = await github.rest.repos.uploadReleaseAsset({
+              ...context.repo, release_id: Number(process.env.RELEASE_ID),
+              name, data, headers: {'content-type':'application/zip', 'content-length':data.length}
+            });
+            if (asset.digest && asset.digest !== 'sha256:' + sha) throw new Error('Uploaded digest mismatch');
+            core.info(JSON.stringify({name, sha256:sha, bytes:data.length, asset_id:asset.id}));
