@@ -43,14 +43,14 @@ from roki_ng.body import calibration
 from roki_ng.wire import page
 from roki_ng.supervisor.game.simple_football import SimpleFootball
 from roki_ng.body.motion.backends.roki2 import backend
-from roki_ng.detection.football import ball_at_foot
+from roki_ng.detection.football import ball_at_foot, toe_tips
 from roki_ng.body.motion.engine import Engine
 from roki_ng.body.motion.gait import Servo
 from roki_ng.localisation.filter import PoseFilter
 from roki_ng.localisation.pipeline import process_frame
 from tests.fake_robot import FakeRobot, video_output
 from sim_detection import SimDetection
-from sim_visual_dribble import VisualDribble
+from sim_visual_dribble import VisualDribble, VisualOpening
 from sim_referee import GOAL_CLEAR_HEIGHT, PitchReferee, painted_limits
 from sim_scene import apply_settings, load_settings, soccer_model, opposing_start
 from sim_calibration import CalibrationSession, run_calibration
@@ -383,6 +383,8 @@ class GameAdapter:
         self.odometry.yaw, self.odometry.yaw_offset = world.yaw, 0.
         self.tracker = SceneTracker()
         self.pose = None
+        self.view_observation = None
+        self.aim_snapshot = None
         self.scene = {}
         self.visual_window = None
         self.localiser = None
@@ -673,28 +675,48 @@ class GameAdapter:
         if worker != "detection":
             raise ValueError(f"Unsupported worker {worker}")
         if op == "football.pose":
+            self.view_observation = None
             self.pose = args if args and args.get("active") else None
             self.tracker = SceneTracker()
             return {}
         if op == "football.decision":
+            aim = (args or {}).get('shot_aim')
+            if aim and self.view_observation and aim['frame'] == self.view_observation[1]['sequence']:
+                from roki_ng.detection.football import render_scene
+                image, scene, candidates = self.view_observation
+                goals = [self.p[f'field.goal.{i}'] for i in (0, 1)]
+                annotated = render_scene(image, scene, "Strategy aim", goals, goals[self.p['match.own_goal']]['colour'],
+                                         candidates=candidates, shot_aim=aim)
+                self.aim_snapshot = time.monotonic(), cv2.resize(annotated, (260, 212)), aim
             return {}
         if op != "football.status":
             raise ValueError(op)
         if self.pose is None:
             return {"valid": False}
-        image, geometry, ball, point = self.observe_ball()
+        from roki_ng.vision.colour_masks import frame_lab
+        image = self.world.render()
+        colours = frame_lab(image)
+        image, geometry, ball, point = self.observe_ball(image, colours=colours)
         projector = self.world.projector
         parts = goal_parts(image, self.p, projector, None, geometry,
-                           bearing_only=self.pose.get("goal_bearing_only", False))
+                           bearing_only=self.pose.get("goal_bearing_only", False), colours=colours,
+                           feet_only=self.pose.get("kick_feedback", False) and self.pose.get("tilt") == -2100)
+        down = abs(self.world.pan) < 150 and self.world.tilt <= -1600
+        tips = toe_tips(image) if down else None
         scene = dict(valid=True, pose_id=self.pose["pose_id"],
                      sequence=self.world.sequence, received=time.monotonic(),
                      parameter_revision=0, ball=point, parts=parts,
-                     height_m=geometry["height"], foot=(ball_at_foot(image, ball[0]["rect"])
-                         if ball and self.pose.get("pan") == 0 and self.pose.get("tilt") == -2100 else None))
+                     height_m=geometry["height"], toe_tips=tips, foot=(ball_at_foot(image, ball[0]["rect"], tips=tips)
+                         if ball and tips else None))
+        if point and self.pose.get('kick_feedback'):
+            from roki_ng.detection.kick_feedback import kick_view
+            scene['kick_view'] = kick_view(image, self.p, ball[0]['rect'])
+        scene["ball_radius"] = self.p["game.ball_diameter_m"]/2
         self.scene = self.tracker.update(scene)
+        self.view_observation = (image, self.scene, ball)
         return self.scene
 
-    def observe_ball(self, image=None, *, debug=None):
+    def observe_ball(self, image=None, *, debug=None, colours=None):
         if image is None:
             image = self.world.render()
         projector = self.world.projector
@@ -707,7 +729,7 @@ class GameAdapter:
         heading = yaw + geometry["pan"]
         c, s = math.cos(heading), math.sin(heading)
         projector.camera_rotation = np.array([[c,s,0],[-s,c,0],[0,0,1]]) @ camera.xmat.reshape(3,3)
-        ball = ball_candidates(image, self.p, projector, None, camera_height=geometry["height"], debug=debug)
+        ball = ball_candidates(image, self.p, projector, None, camera_height=geometry["height"], debug=debug, colours=colours)
         point = None
         if ball:
             try:
@@ -739,6 +761,12 @@ class SimRobot(FakeRobot):
         self.manual_job_id = None
         self.drive_sample = None
         super().__init__(port, robot_id="SIM-ROKI2")
+        self.localisation_enabled = True
+        self.debug_filter = None
+        self.debug_pose = None
+        self.last_debug_pose = 0.
+        self.game_sample_due = 0.
+        self.game_sample_sequence = 0
         self.game_running = False
         self.mode = "IDLE"
         self.streams["camera"]["settings"]["fps"] = 15.
@@ -747,7 +775,7 @@ class SimRobot(FakeRobot):
         self.streams["detection"]["settings"].update(fps=5., max_fps=5.)
 
     def video_availability(self):
-        return super().video_availability() | {"detection": self.diagnostic.running}
+        return super().video_availability() | {"detection": self.diagnostic.running or self.game_running and self.game_role == "simple_football"}
 
     def stop_output(self, name):
         output = self.outputs.pop(name, None)
@@ -760,11 +788,30 @@ class SimRobot(FakeRobot):
     def game_state(self):
         state = super().game_state()
         state.update(phase=self.game.info["phase"], reason=self.game.info["reason"],
+                     selected_motion=self.game.info.get("selected_motion"),
                      decision=self.game.info["phase"], ball=self.game.info.get("ball"),
                      travel_m=self.game.odometry.path,
                      position=self.game.odometry.state(),
                      last_correction=self.game.info.get("last_correction"))
         return state
+
+    def publish_game_state(self):
+        rate = self.subscriptions.get("game.state")
+        if not rate or not self.client:
+            self.game_sample_due = 0.
+            return
+        # Delivery cadence belongs to the operator, even if the match clock resets.
+        now = time.perf_counter()
+        if now >= self.game_sample_due:
+            self.game_sample_sequence += 1
+            self.send_data("game.state", self.game_sample_sequence)
+            self.game_sample_due = now + 1 / rate
+
+    def sample(self, topic):
+        result = super().sample(topic)
+        if topic == "game.state":
+            result.update(source_mono_ns=time.monotonic_ns(), age_ms=0)
+        return result
 
     def _require_control(self):
         if not self.client or self.owner != self.client[0]:
@@ -845,9 +892,33 @@ class SimRobot(FakeRobot):
             if op == "detection.stop":
                 self.stop_output("detection")
             return self.diagnostic.command(op, body, self)
+        if op == "data.subscribe" and body.get("topic") == "game.state":
+            rate = body.get("rate_hz")
+            if type(rate) not in (int, float) or not .2 <= rate <= 10:
+                raise Fault("invalid_argument", "game.state rate must be between 0.2 and 10 Hz")
+            self.game_sample_due = 0.
+        if op == "data.list":
+            result = super()._result(op, body)
+            result["items"].append(dict(name="game.state", kind="state", max_rate_hz=10))
+            return result
         if op == "session.close":
+            self.subscriptions.pop("game.state", None)
             for name in list(self.outputs):
                 self.stop_output(name)
+        if op == "localisation.start":
+            if not self.camera_running:
+                raise Fault("not_ready", "Start runtime camera first")
+            result = super()._result(op, body)
+            self.debug_filter = PoseFilter(body['prior'], parameters=self.game.p, heading=body['prior'][2])
+            self.debug_pose = None
+            self.last_debug_pose = 0.
+            return self.localisation_status(result)
+        if op == "localisation.status":
+            return self.localisation_status(super()._result(op, body))
+        if op == "localisation.stop" or op == "camera.stop":
+            self.stop_output("localisation")
+            self.debug_filter = self.debug_pose = None
+            self.localisation_running = False
         if op == "camera.stop":
             self._require_control()
             self.diagnostic.stop()
@@ -1131,10 +1202,61 @@ class SimRobot(FakeRobot):
         pipeline.set_state(self.Gst.State.PLAYING)
         self.outputs[name] = (pipeline, pipeline.get_by_name("source"))
 
+    def localisation_status(self, state):
+        return state | dict(result=self.debug_pose, age_ms=round((time.monotonic()-self.last_debug_pose)*1000)
+                            if self.debug_pose else None)
+
+    def localisation_frame(self, image):
+        if self.debug_filter is None or time.monotonic()-self.last_debug_pose < .2:
+            return None
+        from roki_ng.localisation.debug import video_frame
+        result, lines, circle, posts = process_frame(image, None, self.world.projector, self.debug_filter,
+            self.game.p, self.world.sequence, time.monotonic())
+        spots = result.pop('_spot_observations', [])
+        self.debug_pose = result
+        self.last_debug_pose = time.monotonic()
+        if 'localisation' in self.outputs:
+            return video_frame(image, self.world.projector, None, lines, circle, posts, result,
+                               self.debug_filter.model, self.debug_filter.circles, spots=spots)
+
     def push_frame(self, bgr):
-        diagnostic_frame = self.diagnostic.process(bgr, "detection" in self.outputs)
+        if self.game_running and self.game_role == "simple_football" and "detection" in self.outputs:
+            from roki_ng.detection.football import render_scene
+            now = time.monotonic()
+            diagnostic_frame = None
+            # A restart in tournament mode resets the simulated clock.
+            if now < self.diagnostic.last_video or now-self.diagnostic.last_video >= .2:
+                observation = self.game.view_observation
+                if observation and now-observation[1]["received"] <= .5:
+                    image, scene, candidates = observation
+                else:
+                    from roki_ng.vision.colour_masks import frame_lab
+                    colours = frame_lab(bgr)
+                    image, geometry, candidates, point = self.game.observe_ball(bgr, colours=colours)
+                    down = self.world.tilt <= -1600
+                    parts = goal_parts(image, self.game.p, self.world.projector, None, geometry,
+                                       colours=colours, feet_only=down)
+                    tips = toe_tips(image) if down and abs(self.world.pan) < 150 else None
+                    scene = dict(sequence=self.world.sequence, parts=parts, toe_tips=tips, ball=point,
+                                 height_m=geometry['height'], ball_radius=self.game.p['game.ball_diameter_m']/2,
+                                 foot=ball_at_foot(image, candidates[0]['rect'], tips=tips) if tips and candidates else None)
+                note = f"{self.game.info['phase']} {self.game.info['reason']}"
+                if not observation or now-observation[1]["received"] > .5:
+                    note = 'LIVE camera | ' + note
+                goals = [self.game.p[f"field.goal.{i}"] for i in (0, 1)]
+                diagnostic_frame = render_scene(image, scene, note, goals,
+                    goals[self.game.p['match.own_goal']]['colour'], candidates=candidates, shot_aim=self.game.info.get('shot_aim'))
+                snapshot = self.game.aim_snapshot
+                if snapshot and now-snapshot[0] < 3 and snapshot[2] == self.game.info.get('shot_aim') and snapshot[2]['frame'] != scene['sequence']:
+                    diagnostic_frame[20:232, 540:800] = snapshot[1]
+                    cv2.putText(diagnostic_frame, f"Planned shot | frame {snapshot[2]['frame']}", (542, 248),
+                                cv2.FONT_HERSHEY_SIMPLEX, .48, (255, 0, 255), 1)
+                self.diagnostic.last_video = now
+        else:
+            diagnostic_frame = self.diagnostic.process(bgr, "detection" in self.outputs)
+        localisation_frame = self.localisation_frame(bgr)
         for name, (_, source) in self.outputs.items():
-            frame = diagnostic_frame if name == "detection" else bgr
+            frame = {"detection": diagnostic_frame, "localisation": localisation_frame}.get(name, bgr)
             if frame is not None:
                 payload = frame.tobytes()
                 buffer = self.Gst.Buffer.new_allocate(None, len(payload), None)
@@ -1163,7 +1285,7 @@ def trace_sample(robot, game, world):
                 frame_sequence=scene.get("sequence"))
 
 
-async def run(port, steps=None, viewer=True, settings_path=SETTINGS, trace_path=None, blue_attack=False, state_dir=None, visual_dribble=False):
+async def run(port, steps=None, viewer=True, settings_path=SETTINGS, trace_path=None, blue_attack=False, state_dir=None, visual_dribble=False, visual_opening=False):
     settings = load_settings(settings_path)
     if blue_attack:
         goal_x = settings["layout"]["blue_goal_x_m"]
@@ -1215,6 +1337,7 @@ async def run(port, steps=None, viewer=True, settings_path=SETTINGS, trace_path=
             if not world.motion_lock.locked() and not robot.calibration.enabled:
                 world.advance(.025)
             robot.apply_manual(.025)
+            robot.publish_game_state()
             if robot.game_running and generation != robot.generation:
                 if active:
                     active.cancel()
@@ -1242,7 +1365,7 @@ async def run(port, steps=None, viewer=True, settings_path=SETTINGS, trace_path=
                     mujoco.mj_forward(world.model, world.data)
                     world._put_pose()
                     game.__init__(world, parameters)
-                strategy_type = VisualDribble if visual_dribble else SimpleFootball
+                strategy_type = VisualOpening if visual_opening else VisualDribble if visual_dribble else SimpleFootball
                 strategy = strategy_type(game, parameters, robot.game_entry, robot.delay)
                 if blue_attack and generation == 0:
                     strategy.opening_touch_required = strategy.kickoff_pending = False
@@ -1304,6 +1427,7 @@ def run_cli():
     parser.add_argument("--port", type=int, default=8094)
     parser.add_argument("--steps", type=int)
     parser.add_argument("--headless", action="store_true")
+    parser.add_argument("--visual-opening", action="store_true", help="Select the visual toe-gap opening policy")
     parser.add_argument("--visual-dribble", action="store_true", help="Compare experimental camera-guided walking touches in MuJoCo")
     parser.add_argument("--blue-attack", action="store_true", help="Start Simple Football in open play facing the blue goal")
     parser.add_argument("--state-dir", type=Path, help="Separate persistent simulator parameter directory")
@@ -1312,7 +1436,7 @@ def run_cli():
                         default=WORKSPACE / "roki-ng-operator-gui/sim/latest_trace.jsonl")
     args = parser.parse_args()
     asyncio.run(run(args.port, args.steps, viewer=not args.headless,
-                    settings_path=args.scene_settings, trace_path=args.trace, blue_attack=args.blue_attack, state_dir=args.state_dir, visual_dribble=args.visual_dribble))
+                    settings_path=args.scene_settings, trace_path=args.trace, blue_attack=args.blue_attack, state_dir=args.state_dir, visual_dribble=args.visual_dribble, visual_opening=args.visual_opening))
 
 
 if __name__ == "__main__":

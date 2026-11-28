@@ -1281,3 +1281,52 @@ def test_capture_loss_recovers_game_observer_but_respects_operator_barriers(tmp_
             await game.stop()
             detector.close()
     asyncio.run(run())
+
+
+def test_simple_football_retries_missing_vision_and_keeps_body_faults(tmp_path):
+    from unittest.mock import AsyncMock
+    async def run():
+        game, supervisor, _ = setup(tmp_path)
+        game.info['role'] = 'simple_football'
+        missing = Fault('worker_unavailable', 'test')
+        detector = AsyncMock(side_effect=missing)
+        supervisor.workers['detection'].call = detector
+        assert await game._call('detection', 'football.status') == {}
+        assert game.vision_retry_at > time.monotonic()
+        assert await game._call('detection', 'football.pose', {'active':False}) == {}
+        detector.assert_awaited_once()
+        supervisor.workers['motherboard'].call = AsyncMock(side_effect=missing)
+        with pytest.raises(Fault):
+            await game._call('motherboard', 'state')
+        game.vision_retry_at = 0.
+        supervisor.workers['detection'].call = AsyncMock(return_value={'valid': True})
+        assert (await game._call('detection', 'football.status'))['valid']
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('error', ['worker_unavailable', 'camera_missing', 'camera_buffer'])
+def test_simple_football_continues_and_restarts_camera_after_outage(tmp_path, error):
+    async def run():
+        game, supervisor, session = setup(tmp_path)
+        camera = supervisor.workers['camera']
+        original = camera.call
+        available = False
+
+        async def temporary_outage(op, args=None, **kw):
+            if op == 'camera.status' and not available:
+                raise Fault(error, 'camera')
+            return await original(op, args, **kw)
+
+        camera.call = temporary_outage
+        await game.start(session, dict(strategy='simple_football', entry='center'))
+        try:
+            await until(lambda: game.vision_retry_at > 0)
+            await until(lambda: any(op == 'game.walk' for op, _ in supervisor.workers['motherboard'].calls))
+            available = True
+            # Expire the retry timer without waiting two seconds in this test.
+            game.vision_retry_at = time.monotonic() - .01
+            await until(lambda: any(op == 'ball.start' for op, _ in supervisor.workers['detection'].calls))
+            assert game.info['running'] and game.vision_retry_at == 0
+        finally:
+            await game.stop()
+    asyncio.run(run())

@@ -69,6 +69,15 @@ class LazyWorkerPeer:
         if self.peer:
             self.peer._failed(reason)
 
+    async def retire_failed(self, peer):
+        """Retire only the failed generation, leaving the on-demand endpoint usable."""
+        async with self.lock:
+            if peer is not None and self.peer is peer and not peer.alive:
+                peer.event = lambda *_: None
+                await peer.close()
+                self.peer = None
+                self.idle_since = None
+
     async def start(self):
         async with self.lock:
             await self._start()
@@ -91,7 +100,13 @@ class LazyWorkerPeer:
         except BaseException:
             # No automatic replay of a request with an uncertain outcome.
             peer.event = lambda *_: None
-            await peer.close()
+            try:
+                await peer.close()
+            finally:
+                # An initialization failure can precede the first worker.fault event.
+                # The next explicit start must be able to create a fresh process.
+                if self.role in ('camera', 'detection'):
+                    self.peer = None
             raise
         self.idle_since = None
         self.log('supervisor', 'INFO', f'Worker {self.role} started on demand')

@@ -25,8 +25,10 @@ COLOUR_DEFAULTS = {
 
 SCHEMA = {
     'game.simple_football.entry_forward_mm': ('float', 200., 0., 500., 'next_game', 'Simple football left/right entry distance, millimetres'),
+    'game.simple_football.live_approach': ('bool', True, None, None, 'next_game', 'В открытой игре подходить по свободному пути одной командой с обновлением положения мяча на каждом цикле шага'),
     'game.simple_football.take_clear_shot': ('bool', False, None, None, 'next_game', 'Бить по открытому створу после проверки мяча у стопы'),
     'game.simple_football.placed_approach_trim_mm': ('float', 20., -80., 80., 'next_game', 'Продольная поправка подхода к установленному мячу, мм'),
+    **{f'game.simple_football.{stage}_strike': ('str', 'strategy', None, None, 'next_game', 'Ball strike: strategy default, foot or forward jump') for stage in ('opening', 'play')},
     'game.simple_football.kickoff_side': ('str', 'left', None, None, 'next_game', 'Simple football kickoff side: left or right'),
     'camera.custom_height_m': ('float', 0., 0., 3., 'next_job', 'Optical centre height for stand-mounted camera tests, metres: 0 uses body model; otherwise 0.05..3. Restart detection/localisation after changing.'),
     'game.use_visual_localisation': ('bool', True, None, None, 'next_game', 'Use stationary camera field corrections during game; false keeps IMU/odometry and ball detection. Applies on next game start.'),
@@ -171,6 +173,8 @@ class Parameters:
             result['choices'] = ['software', 'controller'] if self.backend.CONTROLLER_KICK else ['software']
         if key == 'game.simple_football.kickoff_side':
             result['choices'] = ['left', 'right']
+        if key in ("game.simple_football.opening_strike", "game.simple_football.play_strike"):
+            result["choices"] = ["strategy", "foot", "jump"]
         return result
 
     def validate(self, key, value):

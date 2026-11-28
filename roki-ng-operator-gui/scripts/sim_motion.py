@@ -113,6 +113,8 @@ class MotionLibrary:
             elif kind == "around":
                 orders = legacy.around(p, args["distance_m"], args["course"],
                                        args["initial_heading"], args["kick_heading"], ball)
+            elif kind == "kickoff_arc":
+                orders = legacy.kickoff_arc(p, args["distance_m"], args.get("course", 0.), args["invert"])
             elif kind == "kickoff":
                 orders = legacy.kickoff(p, args["invert"], ball)
             else:

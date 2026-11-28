@@ -2,7 +2,11 @@
 
 Roki FPV — пульт оператора для камеры, параметров, игровых режимов и калибровки. Он подключается к голове Roki с программой roki-ng или к локальному симулятору MuJoCo. В репозитории лежат исходники пульта, программы робота, модели поля и измеренный учебный профиль.
 
-**[Скачать выпуск для macOS и Windows](https://github.com/dimaystinov/Roki/releases/tag/fpv-calibration-2026.11.26)** · **[Статья о 20 калибровках](docs/calibration/Инструкция-по-калибровке.md)** · **[Видео MP4 с русской озвучкой, 8 мин 7 с](https://github.com/dimaystinov/Roki/releases/download/fpv-calibration-2026.11.26/Roki-Calibration-RU.mp4)**
+**[Скачать выпуск для macOS и Windows](https://github.com/dimaystinov/Roki/releases/latest)** · **[Статья о 20 калибровках](docs/calibration/Инструкция-по-калибровке.md)** · **[Видео MP4 с русской озвучкой, 8 мин 7 с](https://github.com/dimaystinov/Roki/releases/download/fpv-calibration-2026.11.26/Roki-Calibration-RU.mp4)**
+
+## Отдельный Operator NG Ягубова
+
+В готовые сборки включены **Update-Operator-NG** и **Run-Operator-NG**. Updater устанавливает актуальный интерфейс Ягубова отдельно, проверяет запуск и позволяет откатиться. Ваш FPV Roki и его настройки не заменяются. [Инструкция и ограничения](docs/Operator-NG-updater.md).
 
 ## Обновляемый Roki FPV для macOS и Windows
 

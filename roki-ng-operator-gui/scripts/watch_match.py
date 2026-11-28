@@ -132,7 +132,12 @@ class MatchAdapter(sim.GameAdapter):
             name = self.world.prefix.rstrip("_") or "home"
             detail = args.get("direction") or args.get("leg") or args.get("kind")
             self.world.match.events.append((round(self.world.data.time, 2), name, op, detail))
-        return await super()._move(op, args, **kwargs)
+        result = await super()._move(op, args, **kwargs)
+        if op == 'game.walk' and self.world.match.record:
+            job = next(reversed(self.football_body.jobs.values()))
+            self.world.match.events.append((round(self.world.data.time, 3), name, 'walk_end',
+                dict(phase=self.info['phase'], cycles=job.get('progress',0), live=bool(args.get('live_approach')))))
+        return result
 
     async def _call(self, worker, op, args=None):
         if worker == "detection" and op == "ball.status":

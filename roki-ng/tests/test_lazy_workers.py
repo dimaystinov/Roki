@@ -146,3 +146,86 @@ def test_localisation_explicit_start_recovers_after_process_exit(tmp_path, monke
         new.start.assert_awaited_once()
         new.call.assert_awaited_once_with('localisation.start', request, urgent=False, timeout=3)
     asyncio.run(run())
+
+
+@pytest.mark.parametrize('role', ['camera', 'detection', 'stream'])
+def test_simple_game_recovers_media_peer_and_keeps_body_fault_fatal(tmp_path, role):
+    from roki_ng.supervisor.lazy_worker import LazyWorkerPeer
+
+    async def run():
+        s = Supervisor({'simulate': True, 'state_dir': str(tmp_path)})
+        s.mode = 'GAME'
+        s.game.info.update(role='simple_football', running=True)
+        w = LazyWorkerPeer(role, s.config | {'parameters': dict(s.params.values)}, s.worker_event, s.log)
+        s.workers[role] = w
+        old = SimpleNamespace(alive=False, close=AsyncMock())
+        w.peer = old
+        s._video_fault = AsyncMock()
+        s.worker_event(role, 'worker.fault', {'error': 'process exited'})
+        await asyncio.gather(*s.tasks)
+        assert s.mode == 'GAME' and w.available and w.peer is None
+        old.close.assert_awaited_once()
+        if role != 'stream':
+            assert s.game.vision_retry_at > 0
+        # A late cleanup task from this generation cannot remove its replacement.
+        w.peer = SimpleNamespace(alive=True)
+        await w.retire_failed(old)
+        assert w.alive
+        s.worker_event('motherboard', 'worker.fault', {'error': 'body disconnected'})
+        await asyncio.gather(*s.tasks)
+        assert s.mode == 'FAULT'
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('role', ['camera', 'detection'])
+def test_exited_media_process_can_restart_during_simple_game(tmp_path, role, monkeypatch):
+    import socket
+    import sys
+    from roki_ng.supervisor.lazy_worker import LazyWorkerPeer
+
+    if sys.platform == 'darwin':
+        # Darwin has no Unix seqpacket socketpair. Preserve packet boundaries
+        # for this process-lifetime test; production transport runs on Linux.
+        monkeypatch.setattr(socket, 'SOCK_SEQPACKET', socket.SOCK_DGRAM)
+
+    async def run():
+        s = Supervisor({'simulate': True, 'state_dir': str(tmp_path), 'host': '127.0.0.1', 'port': 0})
+        w = LazyWorkerPeer(role, s.config | {'parameters': {}}, s.worker_event, s.log)
+        s.workers[role] = w
+        s._video_fault = AsyncMock()
+        try:
+            await w.start()
+            process = w.process
+            s.mode = 'GAME'
+            s.game.info.update(role='simple_football', running=True)
+            process.kill()
+            await asyncio.wait_for(process.wait(), 4)
+            async with asyncio.timeout(4):
+                while w.peer is not None:
+                    await asyncio.sleep(.02)
+            assert s.mode == 'GAME' and s.game.vision_retry_at
+            await w.start()
+            assert w.alive and w.process.pid != process.pid
+            assert (await w.call(f'{role}.status')).get('error') in ('', None)
+        finally:
+            s.game.info.update(running=False)
+            await w.close()
+    asyncio.run(run())
+
+
+def test_failed_camera_initialization_allows_another_explicit_start(tmp_path, monkeypatch):
+    from roki_ng.supervisor import lazy_worker
+
+    async def run():
+        w = lazy_worker.LazyWorkerPeer('camera', {'state_dir': str(tmp_path)}, None, lambda *_: None)
+        failed = SimpleNamespace(start=AsyncMock(side_effect=Fault('camera_fault', 'unavailable')),
+                                 close=AsyncMock(), alive=False)
+        ready = SimpleNamespace(start=AsyncMock(), alive=True)
+        peers = iter((failed, ready))
+        monkeypatch.setattr(lazy_worker, 'WorkerPeer', lambda *_: next(peers))
+        with pytest.raises(Fault):
+            await w.start()
+        assert w.available and w.peer is None
+        await w.start()
+        assert w.peer is ready and w.alive
+    asyncio.run(run())

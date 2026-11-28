@@ -119,6 +119,21 @@ def test_pursuing_visitor_sidesteps_behind_ball(tmp_path, side):
     assert 0 < payload['distance_m'] <= .14
 
 
+def test_open_play_tracks_ball_to_foot_in_one_walk(tmp_path):
+    ball = (.60, -.04)
+    strategy, game = harness(tmp_path, ball=ball, goals=[])
+    strategy.attack_axis = 0.
+    strategy.opening_touch_required = False
+    strategy.p['game.simple_football.live_approach'] = True
+    strategy.p['game.soft_kick.right.toe_x_mm'] = 50.
+    strategy.last_scene = dict(confirmed=True, received=time.monotonic(), parts=[])
+    asyncio.run(strategy.attack_after_pass(ball, []))
+    [(op, args)] = commands(game)
+    assert op == 'game.walk' and args['kind'] == 'approach' and args['live_approach']
+    assert .09 < args['stop_x_m'] < .14 and args['target_y_m'] < 0
+    assert (args['x_m'], args['y_m']) == ball
+
+
 @pytest.mark.parametrize("foot_y,aligned,expected", [(.052, True, True), (.052, False, False),
                                                        (-.052, True, False)])
 def test_open_play_uses_visually_confirmed_left_toe(tmp_path, foot_y, aligned, expected):

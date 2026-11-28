@@ -5,3 +5,6 @@ cd "$(dirname "$0")/.."
 export DYLD_FRAMEWORK_PATH="$(brew --prefix qt)/lib"
 export DYLD_FALLBACK_LIBRARY_PATH="$(brew --prefix)/lib"
 .deps/macos/venv/bin/python -m PyInstaller --noconfirm packaging/fpv_roki.spec
+
+cp packaging/{Update,Run}-Operator-NG.command dist/
+chmod +x dist/{Update,Run}-Operator-NG.command

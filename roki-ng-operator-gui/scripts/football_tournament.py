@@ -27,7 +27,7 @@ def schedule():
     return rows
 
 
-def setup(row, profile, **restart):
+def setup(row, profile, home_live=None, **restart):
     sign = 1 if row['side']=='left' else -1
     level = row['level']
     offset = (0., .02, -.035, .04, -.015)[level]
@@ -35,6 +35,10 @@ def setup(row, profile, **restart):
                   yaw_offset=sign*(0, 4, -6, 7, -3)[level], parameters=profile, record=True, imu_seed=(row['number']-1)//2, **restart)
     world, game, strategy, _ = match.players[0]
     strategy.p['game.simple_football.take_clear_shot'] = row['quick']
+    if home_live is not None:
+        for _, _, player, _ in match.players:
+            player.p['game.simple_football.live_approach'] = False
+        strategy.p['game.simple_football.live_approach'] = home_live
     opponent = os.environ.get("ROKI_SIM_OPPONENT")
     if opponent:
         spec = importlib.util.spec_from_file_location("roki_ng.supervisor.game.fixed_opponent", opponent)
@@ -71,8 +75,8 @@ def setup(row, profile, **restart):
     return match
 
 
-def run(row, directory, profile, visible=False):
-    match = setup(row, profile)
+def run(row, directory, profile, visible=False, home_live=None):
+    match = setup(row, profile, home_live)
     start_ball = list(match.ball[:2])
     start_velocity = list(match.data.qvel[match.ball_qvel:match.ball_qvel+2])
     if any(start_ball) or any(start_velocity):
@@ -85,6 +89,8 @@ def run(row, directory, profile, visible=False):
     try:
         while elapsed < 300.-1e-6:
             title = f"Match {row['number']}/100 | {row['case']} | RED {score['goal_blue']} : {score['goal_yellow']} BLUE"
+            if home_live is not None:
+                title += ' | CAMERA WALK' if home_live else ' | BASELINE'
             outcome = asyncio.run(match.run(300.-elapsed, visible, title=title, viewer=viewer))
             if outcome == 'closed':
                 raise SystemExit("Viewer closed before final whistle")
@@ -99,7 +105,7 @@ def run(row, directory, profile, visible=False):
             print(f"GOAL {elapsed:.3f}s red {score['goal_blue']} : {score['goal_yellow']} blue", flush=True)
             if elapsed < 300.-1e-6:
                 with viewer.lock() if viewer else nullcontext():
-                    match = setup(row, profile, shared=shared, visitor_kickoff=outcome=='goal_blue', elapsed=elapsed)
+                    match = setup(row, profile, home_live, shared=shared, visitor_kickoff=outcome=='goal_blue', elapsed=elapsed)
                 kicking = 'visitor' if outcome == 'goal_blue' else 'home'
                 events.append([round(elapsed,3), 'referee','kickoff', kicking, list(match.ball[:2])])
     finally:
@@ -112,7 +118,7 @@ def run(row, directory, profile, visible=False):
         for sample in trace:
             out.write(json.dumps(sample)+'\n')
     mouth = match.players[0][2].specs[1 - match.players[0][2].p['match.own_goal']]
-    doc = dict(row, start_ball_xy=start_ball, start_ball_velocity_xy=start_velocity, result=result, seconds=elapsed, events=events, score=score,
+    doc = dict(row, home_live_approach=home_live, start_ball_xy=start_ball, start_ball_velocity_xy=start_velocity, result=result, seconds=elapsed, events=events, score=score,
                blue_goal_x_m=mouth['x'], blue_inner_width_m=mouth['width'], blue_centre_y_m=mouth['y'],
                ball_radius_m=float(match.model.geom_size[match.ball_geom, 0]))
     tmp = directory/f'match-{name}.tmp'
@@ -126,10 +132,11 @@ if __name__ == '__main__':
     parser.add_argument('--number', type=int, choices=range(1,101))
     parser.add_argument('--parameters', type=Path)
     parser.add_argument("--visible", action="store_true")
+    parser.add_argument('--home-live-approach', action=argparse.BooleanOptionalAction, default=None)
     args=parser.parse_args()
     args.directory.mkdir(parents=True, exist_ok=True)
     rows=schedule()
     if args.number is None:
         (args.directory/'manifest.json').write_text(json.dumps(rows,indent=2)+'\n')
     else:
-        run(rows[args.number-1],args.directory,json.loads(args.parameters.read_text()), args.visible)
+        run(rows[args.number-1],args.directory,json.loads(args.parameters.read_text()), args.visible, args.home_live_approach)

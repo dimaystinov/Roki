@@ -139,11 +139,12 @@ class SimRoki2Tests(unittest.TestCase):
 
         self.assertGreater(asyncio.run(run()), .05)
 
-    def test_centre_restart_holds_stance_while_verifying_single_pass(self):
+    def test_visual_centre_restart_holds_stance_while_verifying_single_pass(self):
         settings = sim.load_settings(sim.SETTINGS)
         settings["layout"].update(robot_spawn_xy=[.30, 0.], robot_yaw_deg=180.)
         parameters = sim.sim_parameters(settings)
-        parameters.update({"match.own_goal": 0, "game.simple_football.kickoff_side": "left"})
+        parameters.update({"match.own_goal": 0, "game.simple_football.kickoff_side": "left",
+                           "game.simple_football.opening_strike": "foot"})
         world = sim.World(settings=settings, parameters=parameters)
         game = sim.GameAdapter(world, parameters)
         strategy = sim.SimpleFootball(game, parameters, "center", 0)
@@ -170,13 +171,19 @@ class SimRoki2Tests(unittest.TestCase):
 
         game._move, world.advance = track_move, track_contact
         try:
-            asyncio.run(strategy.placed_kickoff())
+            async def opening():
+                await strategy.placed_kickoff()
+                for _ in range(12):
+                    if strategy.pending_toe_pass is None:
+                        break
+                    await strategy.place_and_pass(game.revision)
+            asyncio.run(opening())
             right_foot = world.model.joint("right_ankle_roll_joint").bodyid.item()
             self.assertEqual(first_contact, [("motion.kick", right_foot)])
             jobs = list(game.football_body.jobs.values())
             kicks = [j["status"] for j in jobs if j["operation"] == "motion.kick"]
             self.assertEqual(kicks, ["completed"])
-            self.assertEqual(game.info["phase"], "simple_kickoff_verify")
+            self.assertIsNotNone(strategy.kick_check)
             for _ in range(100):
                 world.advance(.02)
                 game._refresh_imu()

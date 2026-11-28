@@ -1,9 +1,34 @@
 """Explicit autonomous game controls; connection alone never starts a game."""
+from datetime import datetime, timezone
 import json
 import math
 import time
 
 from PySide6.QtCore import QObject, Property, QTimer, Signal, Slot
+
+
+def phase_label(phase):
+    groups = (
+        ('Проверка результата удара', ('verify', 'kick_moved', 'kick_missed', 'kick_unconfirmed', 'pass_retry')),
+        ('Удар прыжком вперёд', ('strike_jump',)),
+        ('Удар ногой', ('strike_foot', 'visual_opening_kick', 'angled_kick')),
+        ('Подготовка к удару', ('kick_prepare', 'toe_check', 'pass_heading', 'fine_heading')),
+        ('Вставание', ('get_up',)),
+        ('Игра остановлена', ('stopped',)),
+        ('Пауза', ('paused',)),
+        ('Ожидание старта', ('start_later',)),
+        ('Поиск ворот', ('goal_search', 'goal_scan')),
+        ('Мяч перекрыт · подход по прогнозу', ('ball_prediction', 'predicted_approach')),
+        ('Обход соперника', ('jump_detour',)),
+        ('Прицеливание по воротам', ('keeper_view', 'aim_check', 'aim_adjust')),
+        ('Ближний подход', ('visual_opening_jump', 'toe_hop', 'test_fine', 'side_jump')),
+        ('Дальний подход', ('walk_to_ball', 'test_approach', 'search_walk')),
+        ('Поиск по курсу ворот · нет изображения', ('search_no_image',)),
+        ('Поиск мяча', ('search', 'ball_recheck', 'ball_unseen')),
+        ('Попытка касания по стартовой позиции', ('expected_touch',)),
+        ('Стартовый розыгрыш', ('kickoff',)),
+    )
+    return next((name for name, tokens in groups if any(token in phase for token in tokens)), phase)
 
 
 class Game(QObject):
@@ -15,12 +40,15 @@ class Game(QObject):
         self.data_sources = data_sources
         data_sources.sampleReceived.connect(self._sample)
         data_sources.changed.connect(self.changed.emit)
+        self.strikes = {}
         self.state = {}
         self.calibration_enabled = False
         self.visual_localisation = None
         self.error = ""
         self.pending = False
         self.received = 0.
+        self.archive = None
+        self.archive_status = "Ожидание данных"
         self.clock = QTimer(self)
         self.clock.setInterval(250)
         self.clock.timeout.connect(self.changed.emit)
@@ -65,7 +93,10 @@ class Game(QObject):
                          f"Центр мяча от корпуса: X {setup['x_mm']} мм, Y {setup['y_mm']} мм. "
                          f"От точки удара: {abs(front)} мм {'дальше' if front >= 0 else 'ближе'}, "
                          f"{abs(side)} мм {'левее' if side >= 0 else 'правее'}.")
-        return dict(running=running, fresh=fresh, kickPlacement=placement,
+        phase = self.state.get('phase') or '—'
+        return dict(phaseLabel=phase_label(phase) if fresh else 'Нет свежих данных',
+                    archiveStatus=self.archive_status, strikes=dict(self.strikes),
+                    running=running, fresh=fresh, kickPlacement=placement,
                     visualLocalisationKnown=self.visual_localisation is not None,
                     visualLocalisation=self.visual_localisation is True,
                     state=self.state.get('state', 'Статус не запрошен'),
@@ -77,7 +108,7 @@ class Game(QObject):
                     position=json.dumps(self.state.get('position'), ensure_ascii=False) if fresh else '—',
                     correction=json.dumps(self.state.get('last_correction'), ensure_ascii=False) if fresh else '—',
                     reason=self.state.get('reason') or '', error=self.error,
-                    decision=self.state.get('decision', 'hold') if fresh else '—',
+                    decision=(self.state.get('selected_motion') or self.state.get('decision', 'hold')) if fresh and running and not paused and not pickup else '—',
                     ball=json.dumps(ball, ensure_ascii=False) if fresh and ball else 'Нет актуального мяча',
                     travel=self.state.get('travel_m', 0), jobId=self.state.get('job_id') or '—',
                     pending=self.pending, canRefresh=self.session.connected and not self.pending,
@@ -96,7 +127,30 @@ class Game(QObject):
     @Slot()
     def loadSettings(self):
         if self.session.connected:
+            for stage in ('opening', 'play'):
+                self.session.request('params.get', {'key': f'game.simple_football.{stage}_strike'}, 'game:strike:'+stage)
             self.session.request('params.get', {'key': 'game.use_visual_localisation'}, 'game:visual-setting')
+
+    @Slot(str, str)
+    def setStrike(self, stage, method):
+        if stage in self.strikes and method in ('strategy', 'foot', 'jump') and self.view['canStart']:
+            self.control.command('params.set', {'key': f'game.simple_football.{stage}_strike', 'value': method},
+                                 manual=False, job=False, context='game:strike:'+stage)
+
+    def record(self, kind, data):
+        if self.archive_status.startswith('Ошибка'):
+            return
+        try:
+            if self.archive is None:
+                directory = self.parent().config_dir / 'match-logs'
+                directory.mkdir(parents=True, exist_ok=True)
+                stamp = datetime.now().strftime('%Y%m%d-%H%M%S-%f')
+                self.archive = (directory / (stamp+'.jsonl')).open('x', encoding='utf-8', buffering=1)
+                self.archive_status = str(self.archive.name)
+            row = dict(time=datetime.now(timezone.utc).isoformat(), kind=kind, data=data)
+            self.archive.write(json.dumps(row, ensure_ascii=False)+'\n')
+        except OSError as exc:
+            self.archive_status = 'Ошибка записи: '+str(exc)
 
     @Slot(bool)
     def setVisualLocalisation(self, enabled):
@@ -183,6 +237,8 @@ class Game(QObject):
     def _sample(self, topic, sample):
         if topic != 'game.state':
             return
+        if self.parent() is not None:
+            self.record('game.state', sample)
         self.state = dict(sample['data'])
         age = sample.get('age_ms')
         valid_age = type(age) in (int, float) and math.isfinite(age) and age >= 0
@@ -196,12 +252,18 @@ class Game(QObject):
         if not self.session.connected:
             self.state = {}
             self.calibration_enabled = False
+            self.strikes.clear()
+            self.closeArchive()
             self.visual_localisation = None
             self.received = 0.
             self.pending = False
         self.changed.emit()
 
     def _response(self, op, result, context):
+        if context.startswith('game:strike:'):
+            self.strikes[context.split(':')[-1]] = result['value']
+            self.changed.emit()
+            return
         if op.startswith('sim.calibration.'):
             enabled = result.get('enabled') is True
             if enabled != self.calibration_enabled:
@@ -227,7 +289,7 @@ class Game(QObject):
         self.changed.emit()
 
     def _failed(self, op, message, context):
-        if context == 'game:visual-setting':
+        if context == 'game:visual-setting' or context.startswith('game:strike:'):
             self.error = message
             self.changed.emit()
             return
@@ -242,5 +304,12 @@ class Game(QObject):
                 self.refresh()
             self.changed.emit()
 
+    def closeArchive(self):
+        if self.archive is not None:
+            self.archive.close()
+            self.archive = None
+            self.archive_status = "Ожидание данных"
+
     def shutdown(self):
+        self.closeArchive()
         self.clock.stop()

@@ -167,6 +167,7 @@
     "angle": 0.0,
     "width": 0.05
   },
+  "vision.yellow_posts.b_min": 36,
   "vision.orange_ball.l_min": 35,
   "vision.orange_ball.l_max": 88,
   "vision.orange_ball.a_min": 8,

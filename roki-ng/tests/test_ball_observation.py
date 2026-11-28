@@ -87,13 +87,17 @@ def test_seven_neighbouring_pixels_cannot_confirm_field_support(colour, origin):
 
 def test_thin_mask_uses_pixel_count_and_configurable_size_thresholds():
     image = scene(())
-    cv2.line(image, (300, 400), (550, 400), (0, 140, 255), 1)
+    cv2.circle(image, (400, 400), 20, (0, 140, 255), 1)
     p = parameters()
+    p['vision.orange_ball.pixels_min'] = 50
     assert ball_candidates(image, p, Projector(), [0, 0, 0, 1])
     p['vision.orange_ball.pixels_min'] = 252
     assert not ball_candidates(image, p, Projector(), [0, 0, 0, 1])
     p['vision.orange_ball.pixels_min'] = 50
-    p['vision.orange_ball.box_area_min'] = 252
+    p['vision.orange_ball.box_area_min'] = 41**2+1
+    assert not ball_candidates(image, p, Projector(), [0, 0, 0, 1])
+    cv2.line(image, (300, 400), (550, 400), (0, 140, 255), 1)
+    p['vision.orange_ball.box_area_min'] = 1
     assert not ball_candidates(image, p, Projector(), [0, 0, 0, 1])
 
 
@@ -116,7 +120,7 @@ def test_temporal_freshness_and_rejection():
     assert tracker.update([candidate()], 8, 800, 1.3, 1.9)['reason'] == 'stale'
 
 
-def test_lowest_ball_centre_is_selected_as_in_original():
+def test_nearest_on_field_ball_is_selected():
     class DistanceProjector:
         height = .4068
         def ground_point(self, pixel, quaternion):
@@ -129,7 +133,7 @@ def test_lowest_ball_centre_is_selected_as_in_original():
     candidates = ball_candidates(image, parameters(), DistanceProjector(), [0, 0, 0, 1])
     tracker = BallTracker()
     first = tracker.update(candidates, 1, 1, .1, .1)
-    assert first['valid'] and first['rect'] == [280, 410, 321, 451]
+    assert first['valid'] and first['rect'] == [480, 380, 521, 421]
     for order in (candidates, list(reversed(candidates))):
         assert BallTracker().update(order, 1, 1, .1, .1)['rect'] == first['rect']
     moved = tracker.update([candidate(2.5)], 2, 2, .2, .2)

@@ -51,6 +51,7 @@ class Goalkeeper(OriginalStrategy):
         self.visual_capture = None
         self.visual_owned = False
         self.visual_retry_at = self.visual_poll_at = 0.
+        self.vision_retry_at = 0.
 
     def _info(self):
         return dict(running=False, state='stopped', role=None, entry=None, phase='idle',
@@ -69,7 +70,27 @@ class Goalkeeper(OriginalStrategy):
         return state
 
     async def _call(self, role, op, args=None, **kwargs):
-        return await self.s.workers[role].call(op, args or {}, **kwargs)
+        tracking = (role == 'detection' and self.info.get('role') == 'simple_football'
+                    and op in ('football.pose', 'football.status', 'football.decision', 'ball.geometry', 'ball.status'))
+        if tracking and getattr(self, 'vision_retry_at', 0):
+            return {}
+        if tracking and op in ('football.status', 'ball.status'):
+            kwargs.setdefault('timeout', .24)
+        try:
+            result = await self.s.workers[role].call(op, args or {}, **kwargs)
+        except Fault as exc:
+            # A dropped or delayed sample should not tear down a healthy camera.
+            if tracking and op in ('football.status', 'ball.status') and exc.code in (
+                    'busy', 'timeout', 'worker_timeout', 'deadline_exceeded'):
+                return {}
+            if not tracking or exc.code not in ('worker_unavailable', 'not_ready', 'timeout', 'worker_timeout', 'busy', 'detection_fault'):
+                raise
+            self.vision_retry_at = time.monotonic()+2
+            self.s.log('game', 'WARNING', f'Vision unavailable during {op}: {exc}')
+            return {}
+        if tracking and op == 'ball.status' and (result.get('error') or result.get('running') is False):
+            self.vision_retry_at = time.monotonic()+2
+        return result
 
     def _invalidate_observation(self):
         self.visual_window = None
@@ -676,6 +697,7 @@ class Goalkeeper(OriginalStrategy):
 
     async def _run(self, parameters, role, entry, delay):
         detection_started = detection_ready = False
+        self.vision_retry_at = 0.
         if role in ('ball_kick_test', 'simple_football', 'danger_football', 'simple_goalkeeper'):
             # Per-run override only. Never modify the persisted game settings.
             parameters = parameters | {'game.use_visual_localisation': False}
@@ -698,11 +720,23 @@ class Goalkeeper(OriginalStrategy):
                     if not await self._prepare(parameters, entry):
                         await asyncio.sleep(.05)
                         continue
-                    if not detection_ready:
+                    if (not detection_ready or self.vision_retry_at) and time.monotonic() >= self.vision_retry_at:
                         detection_started = True
-                        detection_ready = await self._start_detection(parameters)
-                        if not detection_ready:
-                            continue
+                        try:
+                            detection_ready = await self._start_detection(parameters)
+                        except Fault as exc:
+                            if role != 'simple_football' or exc.code not in (
+                                    'camera_fault', 'camera_not_ready', 'camera_missing', 'camera_config',
+                                    'camera_request', 'camera_metadata', 'camera_buffer',
+                                    'not_supported', 'restart_required', 'worker_unavailable', 'not_ready',
+                                    'timeout', 'worker_timeout', 'busy', 'detection_fault'):
+                                raise
+                            self.vision_retry_at = time.monotonic()+2
+                            self.s.log('game', 'WARNING', f'Playing with visual estimates; retrying camera: {exc}')
+                        else:
+                            self.vision_retry_at = 0.
+                            if not detection_ready:
+                                continue
                     if not self._allowed():
                         continue
                     if role == 'simple_football' and delay:

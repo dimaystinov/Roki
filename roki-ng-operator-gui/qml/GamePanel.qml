@@ -49,6 +49,22 @@ ScrollView {
             checked: game.view.visualLocalisation
             onClicked: game.setVisualLocalisation(checked)
         }
+        Repeater {
+            model: ["opening", "play"]
+            delegate: RowLayout {
+                id: strikeRow
+                required property string modelData
+                visible: role.currentText === "simple_football"
+                SelectableLabel { text: modelData === "opening" ? "Первый удар" : "Удар в игре" }
+                ComboBox {
+                    property var methods: ["strategy", "foot", "jump"]
+                    model: ["Как в стратегии", "Ногой", "Прыжком вперёд"]
+                    currentIndex: methods.indexOf(game.view.strikes[strikeRow.modelData])
+                    enabled: currentIndex >= 0 && game.view.canStart
+                    onActivated: game.setStrike(strikeRow.modelData, methods[index])
+                }
+            }
+        }
         SelectableLabel { text: "Запуск включает движения. Стартовый манёвр center настраивается через params: game.forward.kick_off_ride. Повторный ввод — после готовности Pick up."; wrapMode: Text.Wrap; Layout.fillWidth: true }
         RowLayout {
             ComboBox { id: role; objectName: "gameRole"; model: ["FIRA_penalty_Goalkeeper", "forward", "ball_kick_test", "simple_football", "danger_football", "simple_goalkeeper"] }
@@ -103,6 +119,8 @@ ScrollView {
         }
         SelectableLabel { text: game.view.blockedReason; visible: !game.view.canStart; wrapMode: Text.Wrap; Layout.fillWidth: true }
         SelectableLabel { objectName: "gameError"; text: game.view.error; color: "#b03030"; visible: text.length > 0; wrapMode: Text.Wrap; Layout.fillWidth: true }
+        SelectableLabel { text: "Сейчас: " + game.view.phaseLabel; font.bold: true }
+        SelectableLabel { text: "Журнал FPV: " + game.view.archiveStatus; Layout.fillWidth: true; wrapMode: Text.WrapAnywhere }
         SelectableLabel { objectName: "gameState"; text: (game.view.fresh ? "" : "Нет актуального статуса. ") + game.view.role + " · " + game.view.state + " · " + game.view.phase; wrapMode: Text.Wrap; Layout.fillWidth: true }
         SelectableLabel { text: "Восстановление: " + game.view.recovery + " · Попытка вставания: " + game.view.recoveryAttempt + (game.view.pickupReady ? " · Готов к переносу" : ""); wrapMode: Text.Wrap; Layout.fillWidth: true }
         SelectableLabel { text: game.view.reason; wrapMode: Text.Wrap; Layout.fillWidth: true }

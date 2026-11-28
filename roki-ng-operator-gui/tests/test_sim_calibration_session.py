@@ -212,3 +212,33 @@ def test_colour_diagnostics_use_rendered_frame_and_saved_profile(simulator):
     robot._result("camera.stop", {})
     assert not robot._result("detection.status", {})["running"]
     assert not robot.video_availability()["detection"]
+
+
+def test_game_subscription_records_live_simulator_phase_in_fpv(simulator, tmp_path):
+    from PySide6.QtCore import QCoreApplication
+    from operator_gui.controller import Controller
+    from tests.test_operator import wait_until
+
+    app = QCoreApplication.instance() or QCoreApplication([])
+    robot = simulator
+    assert 'game.state' in {item['name'] for item in robot._result('data.list', {})['items']}
+    client = Controller('127.0.0.1', robot.port, tmp_path)
+    try:
+        client.connectRobot('127.0.0.1', robot.port)
+        wait_until(lambda: client.transport.connected)
+        client.game.watch(True)
+        wait_until(lambda: 'game.state' in client.data_sources.active)
+        robot.game.info.update(phase='visual_opening_kick')
+        robot.publish_game_state()
+        wait_until(lambda: client.game.view['fresh'])
+        archive = Path(client.game.archive_status)
+        assert json.loads(archive.read_text().splitlines()[-1])['data']['data']['phase'] == 'visual_opening_kick'
+        robot.publish_game_state()
+        assert robot.game_sample_sequence == 1
+        client.game.watch(False)
+        wait_until(lambda: 'game.state' not in robot.subscriptions)
+        robot.publish_game_state()
+        assert robot.game_sample_sequence == 1
+    finally:
+        client.shutdown()
+        app.processEvents()

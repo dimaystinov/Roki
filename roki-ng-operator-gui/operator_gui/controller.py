@@ -546,6 +546,7 @@ class Controller(QObject):
                 if type(ident) is not int or ident <= self.last_log_record:
                     continue
                 self.last_log_record = ident
+                self.game.record("robot.log", record)
                 self._log(str(record.get("level", "INFO")), str(record.get("message", "")),
                           str(record.get("source", "robot")))
         else:

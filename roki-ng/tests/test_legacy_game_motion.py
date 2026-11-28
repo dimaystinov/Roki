@@ -359,3 +359,13 @@ def test_opening_touch_has_smaller_foot_steps_than_regular_omni(tmp_path):
     soft = list(legacy.omni(*args, soft_touch=True))
     assert len(soft) > len(regular)
     assert max(math.hypot(o.step, o.side) for o in soft) < max(math.hypot(o.step, o.side) for o in regular)
+
+
+def test_live_approach_updates_next_cycle_until_camera_confirms_target(tmp_path):
+    p = Parameters(tmp_path).values
+    frames = iter([(.5, -.13), (.4, .02), (.13, -.052)])
+    orders = list(legacy.approach(p, .5, 0., lambda: next(frames),
+                                  stop_x_m=.125, target_y_m=-.052, live_approach=True))
+    assert len(orders) == 2 and all(o.right for o in orders)
+    assert orders[0].side > 0 > orders[1].side
+    assert all(o.step > 0 for o in orders)

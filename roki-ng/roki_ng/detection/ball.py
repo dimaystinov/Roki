@@ -55,6 +55,14 @@ def field_near_ball(rect, green, white):
     if (cv2.countNonZero(contact) >= .4*contact.size and
             any(a.size and cv2.countNonZero(a) >= .55*a.size for a in sides)):
         return True
+    # A ball on a diagonal line has both paint and turf in the contact patch.
+    # The toes or a nearby arm may obscure one flank in a downward view.
+    centre = slice(x+w//4, x+3*w//4)
+    rows = slice(top, min(height, top+max(3, h//5)))
+    floor = green[rows, centre] | white[rows, centre]
+    if (floor.size and cv2.countNonZero(floor) >= .75*floor.size
+            and any(a.size and cv2.countNonZero(a) >= .45*a.size for a in sides)):
+        return True
     if cv2.countNonZero(paint) < .4*paint.size:
         return False
     radius = 3*max(w, h)
@@ -62,14 +70,14 @@ def field_near_ball(rect, green, white):
     return cv2.countNonZero(around) >= .30*around.size
 
 
-def ball_candidates(image, parameters, projector, quaternion, camera_height=None, *, debug=None):
+def ball_candidates(image, parameters, projector, quaternion, camera_height=None, *, debug=None, colours=None):
     import cv2
     import numpy as np
     if image.shape != (650, 800, 3) or image.dtype != np.uint8:
         raise ValueError('Expected packed 800x650 BGR image')
     from roki_ng.vision.colour_masks import shadow_mask
-    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
-    brighter = cv2.cvtColor(cv2.convertScaleAbs(image, alpha=1.8), cv2.COLOR_BGR2LAB)
+    from roki_ng.vision.colour_masks import frame_lab
+    lab, brighter = colours if colours is not None else frame_lab(image)
     orange, turf, white = (shadow_mask(lab, brighter, parameters, profile)
                            for profile in ('orange_ball', 'green_field', 'white_marking'))
     _, labels, stats, centers = cv2.connectedComponentsWithStats(
@@ -134,7 +142,7 @@ def ball_candidates(image, parameters, projector, quaternion, camera_height=None
             continue
         decision(rect, 'selected', x_m=px, y_m=py, distance_m=math.hypot(px, py))
         found.append(dict(x_m=px, y_m=py, rect=[x, y, x+w, y+h], center_px=list(center)))
-        break
+    found.sort(key=lambda ball: math.hypot(ball['x_m'], ball['y_m']))
     return found
 
 
@@ -191,6 +199,7 @@ class BallObservation:
         self.scene_pose = None
         self.scene_note = ''
         self.own_decision = None
+        self.shot_aim = None
         self.diagnostic = False
         self.diagnostics = None
         self.video = None
@@ -213,7 +222,10 @@ class BallObservation:
 
     def football_decision(self, args):
         with self.lock:
-            self.own_decision = dict(blocks=args.get('blocks', [])[:4], received=time.monotonic())
+            if 'blocks' in args:
+                self.own_decision = dict(blocks=args['blocks'][:4], received=time.monotonic())
+            if 'shot_aim' in args:
+                self.shot_aim = args['shot_aim']
         return {'accepted': True}
 
     def football_state(self):
@@ -360,7 +372,9 @@ class BallObservation:
                     if pose.get('height_m') is not None:
                         geometry['height'] = pose['height_m']
                     height = geometry["height"]
-                candidates = ball_candidates(image, parameters, projector, imu[2:6], height, debug=debug)
+                from roki_ng.vision.colour_masks import frame_lab
+                colours = frame_lab(image)
+                candidates = ball_candidates(image, parameters, projector, imu[2:6], height, debug=debug, colours=colours)
                 if geometry is not None:
                     # Use exactly the same blob centre as the normal detector.
                     # A separate projection avoids transferring its old floor-height scale.
@@ -372,18 +386,24 @@ class BallObservation:
                             point = plane_point(projector, pixel, imu[2:6], geometry, parameters['game.ball_diameter_m']/2)
                         except ValueError:
                             pass
-                    foot = None
-                    if point and pose['pan'] == 0 and pose['tilt'] == -2100:
-                        from roki_ng.detection.football import ball_at_foot
-                        foot = ball_at_foot(image, selected['rect'])
+                    foot = tips = None
+                    if pose['pan'] == 0 and pose['tilt'] == -2100:
+                        from roki_ng.detection.football import ball_at_foot, toe_tips
+                        tips = toe_tips(image)
+                        if point and tips:
+                            foot = ball_at_foot(image, selected['rect'], tips=tips)
                     parts = goal_parts(image, parameters, projector, imu[2:6], geometry,
-                                       bearing_only=pose.get('goal_bearing_only', False))
+                                       bearing_only=pose.get('goal_bearing_only', False), colours=colours,
+                                       feet_only=pose.get('kick_feedback', False) and pose['tilt'] == -2100)
                     for part in parts:
                         part.update(frame_sequence=header[0], sensor_timestamp_ns=header[1],
                                     pan=pose['pan'], tilt=pose['tilt'], parameter_revision=revision)
                     scene = dict(pose_id=pose['pose_id'], sequence=header[0], stamp=header[1], parameter_revision=revision,
-                                 received=received, ball=point, foot=foot, parts=parts, height_m=geometry['height'],
+                                 received=received, ball=point, foot=foot, toe_tips=tips, parts=parts, height_m=geometry['height'],
                                  ball_radius=parameters['game.ball_diameter_m']/2)
+                    if point and pose.get('kick_feedback'):
+                        from roki_ng.detection.kick_feedback import kick_view
+                        scene['kick_view'] = kick_view(image, parameters, selected['rect'])
                 processing_us = (time.monotonic_ns()-began)//1000
                 with self.lock:
                     if not self.stop_event.is_set() and revision == self.parameter_revision:
@@ -398,11 +418,11 @@ class BallObservation:
                                 caption = f"Ball frame={header[0]} rev={revision} {result['reason']} {processing_us/1000:.1f}ms"
                                 if self.football:
                                     from roki_ng.detection.football import render_scene
-                                    output = render_scene(image, self.scene_tracker.current if pose is self.scene_pose else None,
+                                    output = render_scene(image, self.scene_tracker.current if scene is not None and pose is self.scene_pose else None,
                                                           self.scene_note, [parameters[f'field.goal.{i}'] for i in (0, 1)],
                                                           (parameters[f"field.goal.{parameters['match.own_goal']}"]['colour']
                                                            if pose and pose.get('goal_veto_enabled', True) else None),
-                                                          self.own_decision)
+                                                          self.own_decision, candidates=candidates, shot_aim=self.shot_aim)
                                 else:
                                     output = render(image, debug['masks'], debug['objects'], caption)
                                 self.video.submit(ticket, header, output)

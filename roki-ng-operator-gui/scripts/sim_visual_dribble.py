@@ -34,3 +34,9 @@ class VisualDribble(SimpleFootball):
             dx, dy = max(.015,x-.12), y-offset
             await self.g._move("game.walk", dict(kind="omni", distance_m=min(.20,math.hypot(dx,dy)),
                 course=math.atan2(dy,dx), heading=0.))
+
+
+class VisualOpening(SimpleFootball):
+    """Use the measured image gap between the striking toe and the ball at kickoff."""
+    async def place_and_pass(self, revision):
+        await self.visual_opening_pass(revision)

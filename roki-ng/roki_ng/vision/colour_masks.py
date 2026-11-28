@@ -24,3 +24,10 @@ def shadow_mask(lab, brighter, parameters, profile):
         dark = cv2.inRange(lab[:, :, 0], 8, max(8, lower[0]-1))
         recovered = cv2.bitwise_and(dark, mask(brighter, parameters, profile))
     return cv2.bitwise_or(normal, recovered)
+
+
+def frame_lab(image):
+    """Normal and shadow-enhanced LAB images shared by detectors on one exposure."""
+    import cv2
+    return (cv2.cvtColor(image, cv2.COLOR_BGR2LAB),
+            cv2.cvtColor(cv2.convertScaleAbs(image, alpha=1.8), cv2.COLOR_BGR2LAB))

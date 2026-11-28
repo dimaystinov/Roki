@@ -1,8 +1,9 @@
-"""Detection-only state machine. IMU is a local heading reference, never odometry."""
+"""Camera-guided football with IMU heading and relative odometry during visual outages."""
 import asyncio
 import math
 import time
 import json
+from dataclasses import dataclass
 
 from roki_ng.supervisor.game.expected_gaze import ExpectedGaze
 from roki_ng.body.motion.odometry import GameOdometry, jump_delta
@@ -16,9 +17,21 @@ from roki_ng.body.recovery import body_position
 from roki_ng.supervisor.game.ball_kick_test import kick_alignment
 
 
+@dataclass(frozen=True)
+class BallRegion:
+    point: tuple
+    stamp: float
+    velocity: tuple
+    pose_revision: int
+    path: float
+    source: str
+
+
 class SimpleFootball:
     def __init__(self, game, parameters, entry, delay, *, danger=False):
         self.danger = danger
+        self.last_usable_frame = None
+        self.blind_heading_checked = False
         self.opening_touch_required = not danger and entry == 'center'
         self.start_heading_pending = True
         self.attack_attempts = 0
@@ -40,6 +53,10 @@ class SimpleFootball:
         self.attack_heading = None
         self.keeper_glance_at = -math.inf
         self.final_keeper_check = False
+        self.rebound_turn_stamp = None
+        self.search_track = None
+        self.near_track = None
+        self.predict_after_jump = False
         self.keeper_aim = None
         self.attack_seen_at = -math.inf
         self.check_shot_view = False
@@ -52,6 +69,12 @@ class SimpleFootball:
         self.pass_search_index = 0
         self.central_lane_checked = False
         self.placed_kickoff_started = False
+        self.pass_segments_left = 0
+        self.opening_jump_pending = False
+        self.opening_right_jumps_left = 0
+        self.pending_toe_pass = None
+        self.toe_camera_revision = None
+        self.kick_check = None
         self.placed_ball_reference = None
         self.placed_ball_pass = False
         self.deadline = self.kickoff_heading = None
@@ -83,6 +106,8 @@ class SimpleFootball:
         self.orbit_face_ball = False
         self.last_ball_side = 1
         self.empty_sectors = 0
+        self.field_sector = 0
+        self.field_sector_heading = None
         self.last_score = None
         self.score_kind = None
         self.last_turn_error = None
@@ -144,10 +169,14 @@ class SimpleFootball:
         return result
 
     def cancel_special(self, reason):
+        self.search_track = None
+        self.near_track = None
+        self.predict_after_jump = False
         self.keeper_aim = None
         self.keeper_glance_at = -math.inf
         self.final_keeper_check = False
-        self.empty_sectors = 0
+        self.empty_sectors = self.field_sector = 0
+        self.field_sector_heading = None
         if reason == 'fall' and self.opening_touch_required:
             # The placement is lost. Reacquire visually with the weak-touch
             # restriction still active, even if an opening motion was sent.
@@ -155,6 +184,12 @@ class SimpleFootball:
         self.field_ball = None
         self.check_shot_view = self.trimmed_shot = False
         self.start_heading_pending = False
+        self.pass_segments_left = 0
+        self.opening_jump_pending = False
+        self.opening_right_jumps_left = 0
+        self.pending_toe_pass = None
+        self.toe_camera_revision = None
+        self.kick_check = None
         self.placed_ball_reference = None
         self.placed_ball_pass = False
         self.inspect_feet_first = True
@@ -237,6 +272,7 @@ class SimpleFootball:
 
     def describe(self, phase, reason):
         left = '' if self.deadline is None else f' kickoff={max(0, self.deadline-time.monotonic()):.1f}s'
+        self.g.info.pop('selected_motion', None)
         self.note = f'{phase} jump={self.jumps}/15{left} {reason}'
         self.g.info.update(phase=phase, reason=reason, decision=phase)
         self.g.s.log('game', 'INFO', ('Danger football: ' if self.danger else 'Simple football: ')+self.note)
@@ -271,8 +307,36 @@ class SimpleFootball:
         else:
             self.leg_candidate = (sign, y_mm)
 
+    async def strike(self, args, *, default_jump=False):
+        stage = 'opening' if self.opening_touch_required else 'play'
+        method = self.p.get(f'game.simple_football.{stage}_strike', 'strategy')
+        jump = default_jump if method == 'strategy' else method == 'jump'
+        self.describe('strike_jump' if jump else 'strike_foot',
+                      'forward jump to strike' if jump else f"kick with {args['leg']} foot")
+        odom = getattr(self.g, 'odometry', None)
+        ball = (self.last_scene or {}).get('ball')
+        estimated = None
+        if ball and odom:
+            # Intermediate search point on the attempted strike axis. A new
+            # camera measurement supersedes it even if the ball never moved.
+            advance = .35 if args.get('soft') or jump else .65
+            estimated = odom.field_point((ball[0]+advance, ball[1])), odom.pose_revision
+        if jump:
+            if self.remembered_shot and not self.check_goal_memory():
+                return False
+            completed = await self.jump('forward', 1.)
+            self.forget_goal('strike attempted')
+        else:
+            completed = await self.move('motion.kick', args)
+        if completed and estimated and estimated[1] == odom.pose_revision:
+            self.search_track = BallRegion(estimated[0], time.monotonic(), (0., 0.), estimated[1], odom.path, 'kick_direction')
+            self.near_track = None
+        return completed
+
     async def move(self, op, args):
         revision = self.g.revision
+        detail = args.get('direction') or args.get('leg') or args.get('name') or args.get('kind', '')
+        self.g.info['selected_motion'] = ' '.join(filter(None, (op, detail)))
         if op == "motion.kick" and self.opening_touch_required and not args.get("soft"):
             return False
         if self.expired():
@@ -296,7 +360,7 @@ class SimpleFootball:
             self.expected_gaze.forget_velocity()
         self.goal_views.clear()  # Body-relative endpoints cannot survive a body motion.
         self.sectors_left = 6
-        result = await self.g._move(op, args, monitor_ball=op == 'game.walk' and args.get('kind') != 'kickoff' and self.g.info.get('phase') != 'simple_entry')
+        result = await self.g._move(op, args, monitor_ball=op == 'game.walk' and args.get('kind') != 'kickoff' and self.g.info.get('phase') not in ('simple_entry', 'simple_predicted_approach', 'simple_search_walk'))
         if not result:
             self.cancel_special('motion interrupted')
         elif op == 'game.walk':
@@ -319,7 +383,131 @@ class SimpleFootball:
                                                 course=course, heading=0., yaw_offset=wrap(-yaw),
                                                 keep_crouch=self.opening_touch_required))
 
+    def remember_near_ball(self, scene):
+        odom = getattr(self.g, 'odometry', None)
+        if not odom or not scene.get('confirmed') or not scene.get('ball'):
+            return
+        ball = scene['ball']
+        point = odom.field_point(ball)
+        stamp = scene['received']
+        velocity = (0., 0.)
+        previous = self.search_track
+        if previous and previous.source == 'camera' and previous.pose_revision == odom.pose_revision:
+            dt = stamp - previous.stamp
+            if dt <= 0 and not self.opening_touch_required and scene.get('roll_m_s'):
+                return
+            speed_limit = .9 if self.opening_touch_required else 2.5
+            if 0 < dt < 1.5 and math.dist(point, previous.point) < speed_limit * dt:
+                velocity = tuple((x-y)/dt for x,y in zip(point, previous.point))
+        roll = scene.get('roll_m_s')
+        # Jitter in a single projection pair can resemble a fast roll. Use
+        # the within-pose derivative when an independent displacement agrees.
+        if not self.opening_touch_required and roll and math.hypot(*velocity) > .12:
+            c, sn = math.cos(odom.yaw), math.sin(odom.yaw)
+            vx, vy = roll
+            dx, dy = c*vx-sn*vy, sn*vx+c*vy
+            if dx*velocity[0]+dy*velocity[1] > .7*math.hypot(dx, dy)*math.hypot(*velocity):
+                velocity = ((dx+velocity[0])/2, (dy+velocity[1])/2)
+        self.search_track = BallRegion(point, stamp, velocity, odom.pose_revision, odom.path, 'camera')
+        if math.hypot(*ball) > .55:
+            self.near_track = None
+            return
+        velocity = (0., 0.)
+        if self.near_track and self.near_track[3] == odom.pose_revision:
+            previous, old_stamp, old_velocity, _ = self.near_track
+            dt = stamp-old_stamp
+            if dt <= 0:
+                return
+            if dt < 1 and math.dist(previous, point) < .30*dt:
+                velocity = tuple(.5*v+.5*(x-y)/dt for v,x,y in zip(old_velocity, point, previous))
+        self.near_track = point, stamp, velocity, odom.pose_revision
+
+    async def approach_ball_region(self):
+        """Use one short displacement per independent estimate, then observe again."""
+        track = self.search_track
+        odom = getattr(self.g, 'odometry', None)
+        if not track or not odom:
+            return False
+        self.search_track = None
+        age = time.monotonic()-track.stamp
+        local_only = odom.confidence == 'degraded'
+        rolling = (not self.opening_touch_required and
+                   (track.source == 'kick_direction' or math.hypot(*track.velocity) > .12))
+        local_age = 5 if rolling else 3
+        if track.pose_revision != odom.pose_revision or not 0 <= age < (local_age if local_only else 8):
+            return False
+        if local_only and not 0 <= odom.path-track.path < .15:
+            return False
+        geometry = self.p['field.geometry']
+        target = []
+        for x, v, extent in zip(track.point, track.velocity, (geometry['length'], geometry['width'])):
+            margin = max(0., extent/2 - .15)
+            # Lead the rolling ball by the time to complete a short approach.
+            lead = min(.75, age + .30) if rolling else min(.7, age)
+            predicted = x + v * lead
+            target.append(predicted if local_only else max(-margin, min(margin, predicted)))
+        x, y = odom.body_point(target)
+        distance = math.hypot(x, y)
+        if distance < .16:
+            return False
+        bearing = math.atan2(y, x)
+        # Search allowance, not a measured statistical confidence interval.
+        radius = (.06 if track.source == 'camera' else .25) + .12*age + .55*max(0., odom.path-track.path)
+        self.describe('simple_predicted_approach',
+                      f'last ball area x={x:.2f} y={y:+.2f}m age={age:.1f}s '
+                      f'radius={radius:.2f}m source={track.source}')
+        if abs(bearing) > math.radians(55):
+            if await self.turn(bearing) and rolling and self.rebound_turn_stamp != track.stamp:
+                # A turn changes heading, but it has not reached the search point.
+                self.rebound_turn_stamp = track.stamp
+                self.search_track = track
+        else:
+            travel = min(.12 if local_only else .25, max(.05, distance-max(.12, radius/2)))
+            scene = self.last_scene or {}
+            for part in scene.get('parts', []):
+                if part.get('kind') == 'obstacle':
+                    ox, oy = part['points'][0]
+                    c, sn = math.cos(bearing), math.sin(bearing)
+                    if 0 <= ox*c+oy*sn <= travel+.13 and abs(oy*c-ox*sn) < part['radius']+.13:
+                        return False
+            return await self.walk(travel, bearing)
+        return True
+
+    async def follow_hidden_ball(self, scene):
+        if not self.predict_after_jump or not self.near_track:
+            return False
+        self.predict_after_jump = False
+        point, stamp, velocity, revision = self.near_track
+        age = time.monotonic()-stamp
+        odom = self.g.odometry
+        if not 0 <= age <= 2 or revision != odom.pose_revision or not scene or not scene.get('confirmed'):
+            return False
+        if not 0 <= time.monotonic()-scene.get('received', 0) <= .5:
+            return False
+        x, y = odom.body_point(tuple(a+min(age,.5)*v for a,v in zip(point, velocity)))
+        if x <= 0 or math.hypot(x,y) > .55:
+            return False
+        lateral = y-math.copysign(self.p['game.kick_offset_mm']/1000, y)
+        direction = ('left' if lateral > 0 else 'right') if abs(lateral) > .055 else 'forward'
+        if (direction == 'forward' and x < .13) or self.jump_corridor_blocked(scene, direction, .5):
+            return False
+        self.describe('simple_ball_prediction', f'ball hidden; expected x={x:.2f} y={y:+.2f}m; half jump {direction}')
+        self.last_scene = scene
+        await self.jump(direction, .5)
+        return True
+
     async def jump(self, direction, fraction=1., *, alignment=False):
+        scene = self.last_scene or {}
+        if alignment and direction in ('forward', 'backward', 'left', 'right') and 0 <= time.monotonic()-scene.get('received', 0) <= .5:
+            intended = direction
+            if self.jump_corridor_blocked(scene, direction, fraction):
+                _, oy = min(scene['frame_obstacles'], key=lambda item: math.hypot(*item[0]))[0]
+                alternatives = ('right', 'left') if oy >= 0 else ('left', 'right')
+                direction = next((side for side in alternatives if not self.jump_corridor_blocked(scene, side, fraction)), None)
+                if direction is None:
+                    self.describe('simple_pass_blocked', 'both lateral landing corridors blocked; reobserve')
+                    return False
+                self.describe('simple_jump_detour', f'{intended} blocked; jump {direction}, then reobserve')
         if self.goal_memory is not None:
             if direction in ('left', 'right'):
                 self.goal_memory['side_mm'] += abs(self.p[f'motion.jump_{direction}_mm'])*max(.1, min(1., fraction))
@@ -329,13 +517,76 @@ class SimpleFootball:
                 self.forget_goal('turn or backward reposition')
         if alignment:
             self.jumps += 1
-        return await self.move('game.jump', dict(direction=direction, fraction=max(.1, min(1., fraction))))
+        completed = await self.move('game.jump', dict(direction=direction, fraction=max(.1, min(1., fraction))))
+        self.predict_after_jump = bool(completed and alignment and self.near_track and not direction.startswith('turn_'))
+        return completed
 
     async def turn(self, angle, *, alignment=False, tolerance=15):
         if abs(angle) <= math.radians(tolerance):
             return True
         key = 'motion.jump_yaw_ccw' if angle > 0 else 'motion.jump_yaw_cw'
         return await self.jump('turn_left' if angle > 0 else 'turn_right', abs(angle)/abs(self.p[key]), alignment=alignment)
+
+    async def search_field(self, odom):
+        """Visit the centre circle first, then inspect both halves from inside."""
+        if not odom:
+            await self.search_sector()
+            return
+        geometry = self.p['field.geometry']
+        length, width = geometry['length'], geometry['width']
+        points = ((0., 0.), (.24*length, .23*width), (-.24*length, .23*width),
+                  (-.24*length, -.23*width), (.24*length, -.23*width))
+        index = self.field_sector // 6 % len(points)
+        x, y = odom.body_point(points[index])
+        distance = math.hypot(x, y)
+        travelling = self.field_sector_heading is None and distance > .24
+        if travelling:
+            bearing = math.atan2(y, x)
+        else:
+            if self.field_sector_heading is None:
+                self.field_sector_heading = odom.yaw
+            bearing = wrap(self.field_sector_heading + math.radians(60)*(1+self.field_sector%6) - odom.yaw)
+        # Point the lens into the intended sector while the body catches up.
+        # A head view counts only when that sector is inside the camera's range.
+        sign = self.g.s.params.backend.Robot.camera.pan_sign
+        pan = max(-2200, min(2200, round(bearing/(sign*.00058909))))
+        tilt = self.p['game.head_tilt'] if travelling else min(0, self.p['head.field_tilt']+500)
+        revision = self.g.revision
+        self.describe('simple_search', f'viewpoint {index}; looking into sector {1+self.field_sector%6}/6')
+        scene = await self.look(pan, tilt)
+        if not self.g._same_plan(revision):
+            return
+        if scene and scene.get('ball'):
+            self.empty_sectors = self.field_sector = 0
+            self.field_sector_heading = None
+            self.last_scene = scene
+            self.ball_refresh_after = None
+            self.log_search_found(pan, tilt, scene)
+            await self.attack_after_pass(scene['ball'], assemble_goals(scene.get('parts', []), self.specs))
+            return
+        if not scene or not scene.get('confirmed'):
+            return
+        if travelling:
+            self.describe('simple_search_walk', f'search viewpoint {index}; remaining {distance:.2f}m')
+            if abs(bearing) > math.radians(55):
+                await self.turn(bearing)
+                return
+            c, sn = math.cos(bearing), math.sin(bearing)
+            for part in scene.get('parts', []):
+                if part.get('kind') == 'obstacle':
+                    ox, oy = part['points'][0]
+                    if 0 < ox*c+oy*sn < .44 and abs(oy*c-ox*sn) < part['radius']+.13:
+                        await self.turn(bearing+math.copysign(math.radians(35), -(oy*c-ox*sn)))
+                        return
+            travel = .16 if odom.confidence == 'degraded' else .32
+            await self.walk(min(travel, distance-.10), bearing)
+            return
+        if abs(bearing) <= math.radians(75):
+            self.field_sector += 1
+            if self.field_sector % 6 == 0:
+                self.field_sector_heading = None
+        if abs(bearing) > math.radians(15):
+            await self.turn(bearing)
 
     async def search_sector(self):
         revision = self.g.revision
@@ -354,16 +605,21 @@ class SimpleFootball:
                 return
 
     async def look(self, pan, tilt, *, wait_ball=False, single_frame=False):
-        if self.expired() or not self.g._allowed():
+        if self.expired() or not self.g._allowed() or getattr(self.g, 'vision_retry_at', 0):
             return None
         revision = self.g.revision
         await self.g._call('detection', 'football.pose', {'active': False, 'note': self.note})
-        if not self.g._same_plan(revision):
+        if not self.g._same_plan(revision) or getattr(self.g, 'vision_retry_at', 0):
             return None
-        if not await self.g._move('game.head', {'pan': pan, 'tilt': tilt}):
-            return None
-        if not await self.g._settle(.10):
-            return None
+        toe_view = self.pending_toe_pass is not None and pan == 0 and tilt == -2100
+        if not toe_view or self.toe_camera_revision != revision:
+            self.toe_camera_revision = None
+            if not await self.g._move('game.head', {'pan': pan, 'tilt': tilt}):
+                return None
+            if not await self.g._settle(.10):
+                return None
+            if toe_view:
+                self.toe_camera_revision = revision
         if not self.g._same_plan(revision):
             return None
         self.pose_id += 1
@@ -371,22 +627,40 @@ class SimpleFootball:
         await self.g._call('detection', 'football.pose', dict(active=True, pose_id=pose_id,
                          pan=pan, tilt=tilt, after=time.monotonic(), note=self.note,
                          height_m=getattr(self, 'observation_height', None),
+                         kick_feedback=(tilt == -2100 and (self.pending_toe_pass is not None or self.kick_check is not None)),
                          goal_bearing_only=getattr(self, 'goal_bearing_only', False),
                          goal_veto_enabled=not self.danger and not getattr(self, 'goal_bearing_only', False)))
         last_confirmed = None
-        until = time.monotonic() + (1.05 if wait_ball else .65)
+        near_inspection = (not self.danger and pan == 0 and tilt <= -1700
+                           and (self.pending_toe_pass is not None or self.kick_check is not None
+                                or self.near or self.ball_range <= .35))
+        wait_seconds = 1.05 if wait_ball else .65
+        if near_inspection:
+            # One fresh exposure at kickoff; two in open play if the ball tracker
+            # has to rebuild its history after a head motion at 5 FPS.
+            wait_seconds = .24 if self.pending_toe_pass is not None else .44
+        until = time.monotonic() + wait_seconds
         while self.g._same_plan(revision) and time.monotonic() < until and not self.expired():
             scene = await self.g._call('detection', 'football.status')
-            if not self.g._same_plan(revision):
+            if not self.g._same_plan(revision) or getattr(self.g, 'vision_retry_at', 0):
                 return None
-            if scene.get('valid') and scene.get('pose_id') == pose_id:
-                scene = dict(scene, parts=self.associate_posts(scene.get('parts', [])))
-                if single_frame:
+            received = scene.get('received')
+            if (scene.get('valid') and scene.get('pose_id') == pose_id
+                    and isinstance(received, (int, float)) and 0 <= time.monotonic()-received <= .5):
+                self.last_usable_frame = time.monotonic()
+                self.blind_heading_checked = False
+                scene = dict(scene, ball=scene.get('ball'), parts=self.associate_posts(scene.get('parts') or []))
+                if ((single_frame and (not near_inspection or scene.get('confirmed')))
+                        or (near_inspection and scene.get('ball') and not scene.get('confirmed'))):
+                    if scene.get('confirmed'):
+                        self.remember_gaze(scene)
+                        self.remember_near_ball(scene)
                     return scene
                 # Tracker marks the first frame unconfirmed; wait for the second.
                 if scene.get('confirmed'):
                     if last_confirmed is None or scene.get('received') != last_confirmed.get('received'):
                         self.remember_gaze(scene)
+                        self.remember_near_ball(scene)
                     last_confirmed = scene
                 if scene.get('confirmed') and (not wait_ball or scene.get('ball')):
                     return scene
@@ -425,16 +699,20 @@ class SimpleFootball:
         self.g.s.log('game', 'INFO', f'Start goal bearing: {self.enemy} '
                      f'imu={math.degrees(wrap(yaw+relative)):.1f}deg entry={self.entry}')
 
-    def opening_pass_course(self, yaw, diagonal_deg=15):
-        heading = self.kickoff_heading if self.kickoff_heading is not None else yaw
+    def remembered_goal_heading(self):
         imu = self.gaze_imu()
         if imu is not None:
             for name in ('enemy_goal', 'start_goal'):
                 target = self.expected_gaze.targets.get(name)
                 if target is not None and target[1] == imu[1]:
                     if name == 'start_goal' or 0 <= time.monotonic()-target[2] < 15:
-                        heading = target[0]
-                        break
+                        return target[0]
+        return None
+
+    def opening_pass_course(self, yaw, diagonal_deg=15):
+        heading = self.remembered_goal_heading()
+        if heading is None:
+            heading = self.kickoff_heading if self.kickoff_heading is not None else yaw
         sign = 1 if self.p['game.simple_football.kickoff_side'] == 'left' else -1
         return wrap(heading + sign*math.radians(diagonal_deg) - yaw)
 
@@ -474,6 +752,38 @@ class SimpleFootball:
         return self.expected_gaze.pan(name, yaw=imu[0], epoch=imu[1],
                                       now=time.monotonic(), sign=geometry.pan_sign)
 
+    def remember_field_direction(self, scene, imu, stamp):
+        if not scene.get('confirmed'):
+            return
+        parts = scene['parts']
+        if any(p['colour']==self.own and p['kind']=='opening' for p in parts):
+            return
+        reference = self.expected_gaze.targets.get('side_anchor')
+        if reference is None or reference[1]!=imu[1]:
+            reference = self.expected_gaze.targets.get('start_goal')
+        if reference is None or reference[1]!=imu[1]:
+            return
+        axis = wrap(reference[0]-imu[0])
+        candidates = []
+        for part in parts:
+            if part['kind'] not in ('field_box','cross_row'):
+                continue
+            x,y = part['points'][0]
+            bearing = math.atan2(y,x)
+            if abs(wrap(bearing-axis))>math.radians(35):
+                continue
+            if part['kind']=='cross_row' and abs(wrap(part['normal']-axis))>math.radians(45):
+                continue
+            candidates.append((bearing,part))
+        if not candidates:
+            return
+        first = candidates[0][0]
+        if any(abs(wrap(angle-first))>math.radians(12) for angle,_ in candidates):
+            return
+        angle = first + sum(wrap(angle-first) for angle,_ in candidates)/len(candidates)
+        self.expected_gaze.remember('enemy_goal',(math.cos(angle),math.sin(angle)),
+                                    yaw=imu[0],epoch=imu[1],now=stamp)
+
     def remember_gaze(self, scene):
         imu = self.gaze_imu()
         if imu is None:
@@ -491,9 +801,12 @@ class SimpleFootball:
         # cannot establish which post it is, and must not overwrite that identity.
         openings = [p for p in scene.get('parts', [])
                     if p['colour'] == self.enemy and p['kind'] == 'opening']
+        if not openings:
+            self.remember_field_direction(scene, imu, stamp)
         if len(openings) == 1:
             ends = openings[0]['points']
             centre = tuple((a+b)/2 for a, b in zip(*ends))
+            self.expected_gaze.remember('side_anchor', centre, **kwargs)
             self.expected_gaze.remember('enemy_goal', centre, **kwargs)
             if self.expected_post_side is None:
                 self.expected_post_side = min(range(2), key=lambda i: abs(math.atan2(ends[i][1], ends[i][0])))
@@ -543,6 +856,9 @@ class SimpleFootball:
         self.describe('simple_foot_jump', f'short {direction} jump; reobserve ball after landing')
         ball = (self.last_scene or {}).get('ball')
         if await self.jump(direction, fraction, alignment=True) and ball and not self.opening_touch_required:
+            if self.g.info.get('phase') == 'simple_jump_detour':
+                self.landing_pan = None
+                return
             # Predict the viewing direction only. The next motion still needs a new frame.
             x, y = ball
             forward, lateral = jump_delta(self.p, direction, max(.1, fraction))
@@ -706,6 +1022,7 @@ class SimpleFootball:
             self.g.info['shot_aim'] = dict(frame=view.get('sequence'), keepers=keepers, line_gaps=source.get('line_gaps',[]),
                 penalty_box=source.get('penalty_box',False), source='keeper_window' if keepers else 'posts_center',
                 fraction=fraction, heading_rad=heading, feet_px=source.get('feet_px'), rect=source['rect'])
+            await self.g._call('detection', 'football.decision', {'shot_aim': self.g.info['shot_aim']})
             self.g.s.log('game','INFO',f"Visual shot target {self.g.info['shot_aim']}")
         elif not goal:
             posts = [p for p in (view or {}).get('parts', [])
@@ -811,7 +1128,16 @@ class SimpleFootball:
         # can miss the dark tip even with the ball inside its measured reach.
         calibrated = (leg == 'right' and toe > 0 and -.012 <= x-radius-toe <= .04 and abs(y+offset) <= .027)
         ready |= calibrated and (not foot or foot['leg'] == leg)
-        if distance <= .22 and ready and self.keeper_aim and not visual_aim and not self.final_keeper_check:
+        # Compare the nearest observed opponent surface to the ball.
+        clearance = min((math.dist(ball, part['points'][0]) - part['radius']
+                         for part in scene.get('parts', []) if part['kind'] == 'obstacle'),
+                        default=math.inf)
+        blocked = any(0 < part['points'][0][0]-x < .5 and
+                      abs(part['points'][0][1]-y) <= part['radius']+radius
+                      for part in scene.get('parts', []) if part['kind'] == 'obstacle')
+        fast_shot = (not self.opening_touch_required and not blocked and ready and clearance <= .30 and
+                     any(shot_clear(ball, goal | {'ends': window}, 0.) for window in windows))
+        if not fast_shot and distance <= .22 and ready and self.keeper_aim and not visual_aim and not self.final_keeper_check:
             # Do this even when odometry supplies a plausible fallback course.
             self.final_keeper_check = True
             self.trimmed_shot = False
@@ -822,6 +1148,15 @@ class SimpleFootball:
             if self.g._same_plan(revision):
                 self.ball_refresh_after = time.monotonic()
             return
+        if target is None and odom:
+            if odom.confidence == 'degraded':
+                target = wrap(odom.home_heading - odom.yaw_offset)
+            else:
+                enemy = self.specs[1-self.p['match.own_goal']]
+                gx, gy = odom.body_point((enemy['x'], enemy['y']))
+                target = wrap(yaw + math.atan2(gy-y, gx-x))
+        if target is None:
+            target = self.remembered_goal_heading()
         if target is None:
             self.goal_scan_needed = self.near = True
             return
@@ -840,7 +1175,9 @@ class SimpleFootball:
             self.describe('simple_aim_adjust', 'align before the final approach')
             await self.turn(error,tolerance=6)
             return
-        if distance <= .22 and ready:
+        if fast_shot:
+            on_target = True
+        elif distance <= .22 and ready:
             if not self.final_keeper_check and not rechecked and not known_lane and not windows and time.monotonic()-self.keeper_glance_at > 12:
                 await self.observe_keeper(ball,yaw)
                 return
@@ -871,7 +1208,7 @@ class SimpleFootball:
                 on_target = shot_clear(ball, goal, radius)
             else:
                 tolerance = math.radians(15)
-                if map_tolerance is not None and not (calibrated and known_lane):
+                if map_tolerance is not None and not (ready and known_lane) and not rechecked:
                     tolerance = min(tolerance, map_tolerance)
                     if abs(error) >= tolerance:
                         self.goal_scan_needed = self.near = True
@@ -886,12 +1223,13 @@ class SimpleFootball:
                 self.goal_scan_needed = self.near = True
                 return
             record = self.g.info.get('shot_aim') or {}
-            self.g.info['strike_course'] = dict(heading_rad=target, residual_rad=error,
+            self.g.info['strike_course'] = dict(under_pressure=fast_shot, heading_rad=target, residual_rad=error,
                                                 source=record.get('source') if visual_aim else 'current_goal_or_map',
                                                 fraction=record.get('fraction') if visual_aim else None)
             self.shot_deadline = stamp+.5
-            self.describe('simple_kick', f'confirmed toe; {len(windows)} free windows; aim error {math.degrees(error):+.1f}deg')
-            if await self.move('motion.kick', dict(leg=leg, power=80, offset=max(-60, min(80, round(abs(y)*1000)-62)))):
+            reach_source = 'visible toe' if visible_reach else 'projected ball at calibrated foot'
+            self.describe('simple_kick', f'{reach_source}; {len(windows)} free windows; aim error {math.degrees(error):+.1f}deg')
+            if await self.strike(dict(leg=leg, power=80, offset=max(-60, min(80, round(abs(y)*1000)-62)))):
                 self.near = False
                 self.goal_scan_needed = True
                 self.attack_heading = None
@@ -957,7 +1295,15 @@ class SimpleFootball:
             self.detour_side = 0
         # Cover a diagonal setup in one walking job. Reserve fine hops for
         # the final toe adjustment, where a full gait cycle could touch the ball.
-        if distance < .19 and travel < .035:
+        if (self.p.get('game.simple_football.live_approach') and not self.detour_side
+                and dx > .025 and x > .10 and abs(y) < .30 and abs(course) < math.radians(65)):
+            # Express the desired ball position in the current body frame.
+            # The gait holds that heading and recomputes both errors from the camera.
+            self.describe('simple_live_approach', 'track ball to striking position in one walking job')
+            await self.move('game.walk', dict(kind='approach', distance_m=distance, heading=0.,
+                yaw_offset=wrap(-yaw), x_m=x, y_m=y, stamp=stamp, live_approach=True,
+                stop_x_m=max(.08, x-dx), target_y_m=y-dy))
+        elif distance < .19 and travel < .035:
             await self.short_foot_jump(dx, dy)
         else:
             stride = .22
@@ -1007,34 +1353,53 @@ class SimpleFootball:
         return True
 
     async def placed_kickoff(self):
-        """Fixed centre restart, with the ball placed 300 mm ahead."""
+        """Approach the placed ball on a curved gait, then finish the diagonal pass."""
         revision = self.g.revision
-        scene = await self.look(0, self.p['head.field_tilt'], single_frame=True)
+        yaw, _ = await self.g._imu()
         if not self.g._same_plan(revision):
             return
-        side = 'left'
-        clearance = {'left': 1., 'right': 1.}
-        for (x, y), radius in (scene or {}).get('frame_obstacles', []):
-            # The diagonals start at the centre mark, 30 cm ahead of the robot.
-            dx = x - .30
-            if dx < 0:
-                continue
-            for name, sign in (('left', 1), ('right', -1)):
-                along = (dx + sign*y)/math.sqrt(2)
-                if 0 < along <= .75:
-                    cross = abs(y - sign*dx)/math.sqrt(2)
-                    clearance[name] = min(clearance[name], cross-radius)
-        # Switch only for a clear obstruction of the preferred ball path.
-        # Marginal overlap or ambiguous clearance on both sides keeps the default.
-        radius = self.p['game.ball_diameter_m']/2
-        if clearance['left'] < radius-.02 and clearance['right'] > radius+.02:
-            side = 'right'
-        self.kickoff_side = side
-        self.g.s.log('game', 'INFO', f"Kickoff frame {(scene or {}).get('sequence')}: "
-                     f"clearance {clearance}; selected {side}")
-        await self.diagonal_pass((.30, 0.), kickoff=True)
+        self.kickoff_pending = False
+        self.placed_kickoff_started = True
+        self.remember_start_heading()
+        self.kickoff_side = self.p['game.simple_football.kickoff_side']
+        self.attack_axis = self.kickoff_heading = yaw
+        toe = self.p['game.soft_kick.right.toe_x_mm']
+        side = self.p['game.kick_offset_mm'] + self.p['game.soft_kick.right.outward_trim_mm']
+        depth = (toe + self.p['game.soft_kick.right.forward_trim_mm'] + 20)/1000 + self.p['game.ball_diameter_m']/2
+        sign = 1 if self.kickoff_side == 'left' else -1
+        final = sign*math.radians(60)
+        # Put the ball ahead of the right toe after turning towards the pass.
+        dx = .30 - depth*math.cos(final) - side/1000*math.sin(final)
+        dy = -depth*math.sin(final) + side/1000*math.cos(final)
+        distance = max(.04, math.hypot(dx,dy)+self.p['game.simple_football.placed_approach_trim_mm']/1000)
+        self.describe('simple_placed_approach', f'centre kickoff arc {distance*1000:.0f}mm')
+        if not await self.g._move('game.walk', dict(kind='kickoff_arc', distance_m=distance,
+                course=math.atan2(dy,dx), invert=sign, yaw_offset=wrap(-yaw))) or not self.g._same_plan(revision):
+            return
+        if not await self.g._move('motion.pose', {'name':'base_stand'}) or not self.g._same_plan(revision):
+            return
+        self.approach_crouched = False
+        target = wrap(yaw + sign*math.radians(60))
+        direction = 'turn_left' if sign > 0 else 'turn_right'
+        full_turn = abs(self.p['motion.jump_yaw_ccw' if sign > 0 else 'motion.jump_yaw_cw'])
+        for _ in range(4):
+            yaw, _ = await self.g._imu()
+            if not self.g._same_plan(revision):
+                return
+            error = sign*wrap(target-yaw)
+            if error <= full_turn/2:
+                break
+            self.describe('simple_pass_heading', f'full {direction} jump; remaining {math.degrees(error):.1f}deg')
+            if not await self.jump(direction, 1.) or not self.g._same_plan(revision):
+                return
+        self.opening_jump_pending = True
+        self.opening_right_jumps_left = 0
+        self.pending_toe_pass = (toe, side)
+        await self.place_and_pass(revision)
 
     async def diagonal_pass(self, ball, *, kickoff):
+        if kickoff:
+            return await self.placed_kickoff()
         revision = self.g.revision
         yaw, _ = await self.g._imu()
         if not self.g._same_plan(revision):
@@ -1044,39 +1409,24 @@ class SimpleFootball:
         self.placed_kickoff_started = True
         self.attack_axis = self.kickoff_heading = yaw
         # Aim outside the goal mouth even from the centre of the small field.
-        side_name = self.kickoff_side if kickoff else self.p['game.simple_football.kickoff_side']
-        diagonal = math.radians(45 if side_name == 'left' else -45)
-        if kickoff:
-            target = wrap(yaw + diagonal)
-            self.describe('simple_pass_heading', f'fixed centre restart; {side_name} diagonal')
-            direction = 'turn_left' if diagonal > 0 else 'turn_right'
-            gain = abs(self.p['motion.jump_yaw_ccw' if diagonal > 0 else 'motion.jump_yaw_cw'])
-            # Plan once from this robot's turn calibration. Ignore head observations
-            # and IMU drift when choosing the number and size of turn commands.
-            count = max(1, round(abs(diagonal)/gain))
-            fraction = min(1., abs(diagonal)/(count*gain))
-            for _ in range(count):
-                if not await self.jump(direction, fraction) or not self.g._same_plan(revision):
-                    return
-            planned_angle = math.copysign(count*gain*fraction, diagonal)
-        else:
-            target = wrap(yaw + self.opening_pass_course(yaw, diagonal_deg=45))
-            self.describe('simple_pass_heading', 'face diagonal for open-play pass')
-            for _ in range(8):
-                error = wrap(target-yaw)
-                if abs(error) <= math.radians(6):
-                    break
-                if not await self.turn(error, tolerance=6) or not self.g._same_plan(revision):
-                    return
-                yaw, _ = await self.g._imu()
-                if not self.g._same_plan(revision):
-                    return
+        side_name = self.p['game.simple_football.kickoff_side']
+        target = wrap(yaw + self.opening_pass_course(yaw, diagonal_deg=45))
+        self.describe('simple_pass_heading', 'face diagonal for open-play pass')
+        for _ in range(8):
+            error = wrap(target-yaw)
+            if abs(error) <= math.radians(6):
+                break
+            if not await self.turn(error, tolerance=6) or not self.g._same_plan(revision):
+                return
+            yaw, _ = await self.g._imu()
+            if not self.g._same_plan(revision):
+                return
         if not await self.g._move('motion.pose', {'name': 'base_stand'}) or not self.g._same_plan(revision):
             return
         yaw, _ = await self.g._imu()
         if not self.g._same_plan(revision):
             return
-        angle = planned_angle if kickoff else wrap(yaw-self.kickoff_heading)
+        angle = wrap(yaw-self.kickoff_heading)
         leg = 'right'
         toe = self.p['game.soft_kick.right.toe_x_mm']
         # Field trials undershot the right-foot setup. Compensate planned travel.
@@ -1093,28 +1443,19 @@ class SimpleFootball:
             return
         if not self.g._same_plan(revision):
             return
+
         yaw, _ = await self.g._imu()
         if not self.g._same_plan(revision):
             return
         self.placed_ball_pass = True
         try:
-            if not kickoff:
-                if not await self.finish_diagonal_alignment(revision, toe, side):
-                    return
-            self.describe('simple_placed_pass', f'weak diagonal {side_name}; heading error {math.degrees(wrap(target-yaw)):.1f}deg')
-            if not await self.move('motion.kick', dict(leg=leg, power=38, soft=True, offset=round(side)-62)):
+            if not await self.finish_diagonal_alignment(revision, toe, side):
                 return
-            if not self.g._same_plan(revision) or not kickoff:
+            self.describe('simple_placed_pass', f'weak diagonal {side_name}; heading error {math.degrees(wrap(target-yaw)):.1f}deg')
+            if not await self.strike(dict(leg=leg, power=38, soft=True, offset=round(side)-62)):
                 return
         finally:
             self.placed_ball_pass = False
-        self.pass_check_after = time.monotonic()
-        self.pass_search_index = 0
-        self.placed_ball_reference = (front/1000, -side/1000)
-        self.pose_id += 1
-        await self.g._call('detection', 'football.pose', dict(active=True, pose_id=self.pose_id,
-            pan=0, tilt=self.p['game.head_tilt'], after=time.monotonic(), note='placed pass verification'))
-        self.describe('simple_kickoff_verify', 'check ball displacement after placed pass')
 
     async def follow_kickoff(self, ball, centre, scene):
         """One walking job from the kick to the ball's flank, clearing the centre circle."""
@@ -1193,7 +1534,265 @@ class SimpleFootball:
                 return False
         return False
 
+    async def chase_pass_segment(self, scene, revision):
+        """Advance along the kick heading, checking the path again after each segment."""
+        if not self.g._same_plan(revision):
+            return
+        if not scene or not scene.get('valid') or not scene.get('confirmed'):
+            self.pass_segments_left = 0
+            odom = getattr(self.g, 'odometry', None)
+            if odom:
+                cx, cy = self.pass_centre
+                self.search_track = BallRegion(odom.field_point((cx+.40, cy)), time.monotonic(),
+                                                   (0., 0.), odom.pose_revision, odom.path, 'kick_direction')
+                await self.approach_ball_region()
+            return
+        if not 0 <= time.monotonic() - scene['received'] <= .5 or not self.g._same_plan(revision):
+            return
+        ball = scene.get('ball')
+        if ball and (ball[0] <= 0 or math.hypot(*ball) <= .20):
+            self.pass_segments_left = 0
+            self.inspect_feet_first = True
+            return
+        course = math.atan2(ball[1], ball[0]) if ball else 0.
+        radius = self.p['field.geometry']['circle_diameter'] / 2
+        cx, cy = self.pass_centre
+        obstacles = list(scene.get('frame_obstacles', []))
+        obstacles.extend((part['points'][0], part['radius']) for part in scene.get('parts', [])
+                         if part['kind'] == 'obstacle')
+        # Check the swept segment, including both endpoints. If already close
+        # to an opponent, allow only a course that increases separation.
+        for offset in (0, 35, -35, 65, -65, 90, -90):
+            direction = course + math.radians(offset)
+            c, s = math.cos(direction), math.sin(direction)
+            along_centre = cx*c + cy*s
+            cross_centre = cy*c - cx*s
+            remaining = along_centre + math.sqrt(max(0., radius**2 - cross_centre**2))
+            if math.hypot(cx, cy) >= radius or remaining <= .01:
+                self.pass_segments_left = 0
+                return
+            distance = min(radius, remaining, math.hypot(*ball) - .14 if ball else math.inf)
+            for (x, y), obstacle_radius in obstacles:
+                along = x*c + y*s
+                nearest = min(distance, max(0., along))
+                if along >= 0 and math.hypot(x-nearest*c, y-nearest*s) < obstacle_radius + .13:
+                    break
+            else:
+                self.describe('simple_pass_follow', f'follow diagonal {distance:.2f}m, course {math.degrees(direction):+.0f}deg')
+                if await self.walk(distance, direction) and self.g._same_plan(revision):
+                    self.pass_centre = (cx-distance*c, cy-distance*s)
+                    self.pass_segments_left -= 1
+                return
+        self.describe('simple_pass_blocked', 'opponent blocks the pass corridor; recheck camera')
+
+    def opening_ball_at_foot(self, scene, toe_mm, side_mm):
+        x, y = scene['ball']
+        gap = x - toe_mm/1000 - self.p['game.ball_diameter_m']/2
+        lateral = y + side_mm/1000
+        foot = scene.get('foot')
+        aligned = abs(lateral) <= .030
+        in_range = -.012 <= gap <= .030
+        if foot:
+            aligned = foot['leg'] == 'right' and foot['aligned']
+            in_range = -.08 <= foot['gap_ratio'] <= .34
+        return gap, lateral, aligned, in_range
+
+    def jump_corridor_blocked(self, scene, direction, fraction=1.):
+        travel = abs(self.p[f'motion.jump_{direction}_mm'])*max(.1, min(1., fraction))/1000
+        dx, dy = {'forward': (1,0), 'backward': (-1,0), 'left': (0,1), 'right': (0,-1)}[direction]
+        for (ox, oy), radius in scene.get('frame_obstacles', []):
+            along, across = ox*dx+oy*dy, oy*dx-ox*dy
+            if along > 0 and math.hypot(max(0., along-travel), across) < radius+.13:
+                return True
+        return False
+
+    def pass_jump_blocked(self, scene, direction):
+        if self.jump_corridor_blocked(scene, direction):
+            self.describe('simple_pass_blocked', f'opponent blocks {direction} pass jump')
+            return True
+        return False
+
+    async def visual_opening_pass(self, revision):
+        toe, side = self.pending_toe_pass
+        self.opening_jump_pending = False
+        scene = await self.look(0, -2100)
+        if not self.g._same_plan(revision):
+            return
+        if not scene or not scene.get('ball'):
+            if await self.follow_hidden_ball(scene):
+                return
+            self.describe('visual_ball_recheck', 'inspect expected foot area from a second angle')
+            scene = await self.look(0, -1700, single_frame=True)
+            if not self.g._same_plan(revision):
+                return
+            if not scene or not scene.get('ball'):
+                self.pending_toe_pass = None
+                if self.placed_kickoff_started and self.opening_touch_required:
+                    # The placed-ball manoeuvre just reached the centre mark.
+                    # Try once, then verify or pursue; contact remains unknown.
+                    self.describe('simple_expected_touch', 'weak touch at nominal centre placement')
+                    if await self.strike(dict(leg='right', soft=True, power=38, offset=0)) and self.g._same_plan(revision):
+                        self.kick_check = (None, None, toe, side)
+                return
+        depth = toe/1000 + self.p['game.ball_diameter_m']/2 + .02
+        lateral = side/1000
+        x, y = scene['ball']
+        # At the edge of the calibrated window another view can change the choice.
+        clearance = min((math.dist((x, y), pos) - radius
+                         for pos, radius in scene.get('frame_obstacles', ())), default=math.inf)
+        error = max(abs(x-depth), abs(abs(y)-lateral))
+        if not scene.get('foot') and .015 < error < .03 and clearance > .30:
+            check = await self.look(0, -1700, single_frame=True)
+            if not self.g._same_plan(revision):
+                return
+            if check and check.get('ball'):
+                scene = check
+                x, y = scene['ball']
+        self.last_scene = scene
+        foot = scene.get('foot')
+        self.g.s.log('game', 'INFO', f"Opening frame {scene.get('sequence')}: ball={x:.3f},{y:+.3f}m toe={foot['leg'] if foot else 'unconfirmed'} obstacles={len(scene.get('frame_obstacles', []))}")
+        if foot:
+            leg = foot['leg']
+            aligned = foot['aligned'] and -.08 <= foot['gap_ratio'] <= .40
+            reason = 'visible ball in toe window'
+            dx, dy = self.visual_adjustment(foot)
+        else:
+            leg = 'right' if y < 0 else 'left'
+            dx, dy = x-depth, y-math.copysign(lateral, y)
+            aligned = max(abs(dx), abs(dy)) <= .02
+            reason = 'visible ball in calibrated foot window'
+        if aligned:
+            self.describe('visual_opening_kick', reason)
+            self.pending_toe_pass = None
+            if await self.strike(dict(leg=leg, soft=True, power=38, offset=0)) and self.g._same_plan(revision):
+                self.kick_check = (scene.get('kick_view'), (x,y), toe, side)
+            return
+        # Roki_2_Soccer fine_adjustment_before_kick: correct fore/aft first,
+        # then lateral error with the calibrated directional jumping slot.
+        # Reobserve after each landing so a displaced ball cannot drive two moves.
+        if foot and not foot['aligned'] and abs(dy) > .010 and -.12 <= foot['gap_ratio'] <= .55:
+            direction = 'left' if dy > 0 else 'right'
+        elif abs(dx) > .010:
+            direction = 'forward' if dx > 0 else 'backward'
+        elif abs(dy) > .010:
+            direction = 'left' if dy > 0 else 'right'
+        else:
+            # Sub-centimetre trim when projection and toe visibility disagree.
+            await self.short_foot_jump(dx, dy)
+            return
+        self.describe('visual_opening_jump', f'{direction} jump; recheck ball after landing')
+        await self.jump(direction, 1., alignment=True)
+
+    async def place_and_pass(self, revision):
+        if self.p.get('game.simple_football.opening_strike') == 'foot':
+            return await self.visual_opening_pass(revision)
+        toe_mm, side_mm = self.pending_toe_pass
+        if self.opening_jump_pending:
+            while True:
+                direction = 'right' if self.opening_right_jumps_left else 'forward'
+                scene = await self.g._call('detection', 'football.status')
+                if not self.g._same_plan(revision):
+                    return
+                if scene and 0 <= time.monotonic()-scene.get('received', 0) <= .5 and self.pass_jump_blocked(scene, direction):
+                    return
+                if direction == 'forward':
+                    break
+                self.describe('simple_pass_side_jump', f'right jump {4-self.opening_right_jumps_left}/3')
+                if not await self.jump('right', 1.) or not self.g._same_plan(revision):
+                    return
+                self.opening_right_jumps_left -= 1
+            self.opening_jump_pending = False
+            self.pending_toe_pass = None
+            self.describe('simple_placed_pass', 'fixed opening forward jump')
+            if await self.strike(dict(leg='right', soft=True, power=38, offset=0), default_jump=True) and self.g._same_plan(revision):
+                self.kick_check = (None, None, toe_mm, side_mm)
+            return
+        self.describe('simple_toe_check', 'check the ball against the calibrated foot position')
+        scene = await self.look(0, -2100)
+        if not self.g._same_plan(revision):
+            return
+        if not scene or not scene.get('ball') or not 0 <= time.monotonic()-scene.get('received',0) <= .5:
+            self.pending_toe_pass = None
+            self.placed_kickoff_started = False
+            await self.approach_ball_region()
+            return
+        x, y = scene['ball']
+        gap, lateral, aligned, in_range = self.opening_ball_at_foot(scene, toe_mm, side_mm)
+        self.g.s.log('game', 'INFO', f'Opening forward hop: gap={gap*1000:.0f}mm lateral={lateral*1000:+.0f}mm')
+        travel = self.p['motion.jump_forward_mm']/1000
+        if self.pass_jump_blocked(scene, 'forward'):
+            return
+        if gap > travel and not (aligned and in_range):
+            self.describe('simple_toe_hop', 'one forward approach jump; recheck ball')
+            await self.jump('forward', 1.)
+            return
+        self.pending_toe_pass = None
+        self.toe_camera_revision = None
+        self.describe('simple_placed_pass', 'play the ball with one full forward jump')
+        if not await self.strike(dict(leg='right', soft=True, power=38, offset=0), default_jump=True):
+            return
+        if self.g._same_plan(revision):
+            self.kick_check = (scene.get('kick_view'), (x,y), toe_mm, side_mm)
+            self.describe('simple_kickoff_verify', 'verify ball against pitch markings after the forward jump')
+
+    async def check_opening_kick(self, revision):
+        from roki_ng.detection.kick_feedback import kick_result
+        before, point, toe, side = self.kick_check
+        scene = await self.look(0, -2100, wait_ball=True)
+        if not self.g._same_plan(revision):
+            return
+        if not scene or not scene.get('confirmed') or not 0 <= time.monotonic()-scene.get('received', 0) <= .5:
+            self.describe('simple_kick_unconfirmed', 'no usable image; search along attempted pass')
+            self.kick_check = None
+            self.placed_ball_reference = point or (toe/1000 + self.p['game.ball_diameter_m']/2, -side/1000)
+            return
+        if scene.get('ball'):
+            gap, lateral, aligned, in_range = self.opening_ball_at_foot(scene, toe, side)
+            radius = self.p['game.ball_diameter_m']/2
+            reach = self.p['motion.jump_forward_mm']/1000
+            reachable = -radius <= gap <= reach + radius and abs(lateral) <= radius + .030
+            self.g.s.log('game', 'INFO', f'After opening jump: gap={gap*1000:.0f}mm lateral={lateral*1000:+.0f}mm reachable={reachable}')
+            if (aligned and in_range) or reachable:
+                self.kick_check = None
+                self.pending_toe_pass = (toe, side)
+                self.describe('simple_pass_retry', 'ball still at right toe; repeat forward pass jump')
+                return
+        if point is None:
+            if not scene.get('confirmed') or not 0 <= time.monotonic()-scene.get('received', 0) <= .5:
+                return
+            # No pre-jump measurement in the fixed opening. Resume tracking
+            # from the nominal toe position without claiming measured contact.
+            self.kick_check = None
+            self.placed_ball_reference = (toe/1000 + self.p['game.ball_diameter_m']/2, -side/1000)
+            self.pass_check_after = time.monotonic()
+            self.pass_search_index = 0
+            return
+        shift = kick_result(before,scene.get('kick_view')) if scene.get('ball') else None
+        if shift is not None and shift <= .35:
+            self.kick_check = None
+            self.pending_toe_pass = (toe,side)
+            self.describe('simple_kick_missed', f'ball stayed on the same marking ({shift:.2f} diameters); align again')
+            return
+        if shift is not None and shift >= .75:
+            self.describe('simple_kick_moved', f'ball moved {shift:.2f} diameters against pitch markings')
+        else:
+            self.describe('simple_kick_unconfirmed', 'displacement uncertain; reacquire the ball')
+            if not scene.get('confirmed'):
+                return
+            if scene.get('ball') and math.dist(scene['ball'],point) <= self.p['game.ball_diameter_m']*.5:
+                self.kick_check = None
+                self.pending_toe_pass = (toe,side)
+                return
+            # The current view is usable for pursuit even when registering
+            # the paint across the kick was ambiguous. Keep contact unconfirmed.
+        self.kick_check = None
+        self.placed_ball_reference = point
+        self.pass_check_after = time.monotonic()
+        self.pass_search_index = 0
+
     async def step(self):
+        if self.last_usable_frame is None:
+            self.last_usable_frame = time.monotonic()
         revision = self.g.revision
         if self.restart_pivot:
             self.restart_pivot = False
@@ -1225,39 +1824,48 @@ class SimpleFootball:
         if self.danger:
             await self.danger_ball_step()
             return
+        if self.kick_check is not None:
+            await self.check_opening_kick(revision)
+            return
+        if self.pending_toe_pass is not None:
+            await self.place_and_pass(revision)
+            return
         if self.kickoff_pending:
             await self.placed_kickoff()
             return
-        if self.placed_ball_reference is not None:
-            # The kick ends in a slot pose. Prepare once it is safe to walk,
-            # then acquire the chase frame. Keep the reference if interrupted.
+        if self.placed_ball_reference is not None or self.pass_segments_left:
             if not await self.g._prepare(self.p, self.entry) or not self.g._same_plan(revision):
                 return
-            scene = await self.g._call('detection', 'football.status')
-            ball = scene.get('ball') if scene.get('pose_id') == self.pose_id and scene.get('confirmed') and scene.get('valid') and 0 <= time.monotonic()-scene.get('received', 0) < .5 else None
-            if ball is None and time.monotonic() >= self.pass_check_after:
-                sign = 1 if getattr(self, 'kickoff_side', self.p['game.simple_football.kickoff_side']) == 'left' else -1
-                poses = ((0, self.p['game.head_tilt']), (-sign*1300, -1200),
-                         (sign*1300, -1200), (0, -2100))
-                pan, tilt = poses[self.pass_search_index % len(poses)]
-                self.pass_search_index += 1
-                scene = await self.look(pan, tilt, wait_ball=True)
-                ball = scene.get('ball') if scene else None
-            if not self.g._same_plan(revision) or ball is None:
+            scene = await self.look(0, self.p['game.head_tilt'])
+            if not self.g._same_plan(revision):
                 return
-            if math.dist(self.placed_ball_reference, ball) >= .20:
-                centre = self.placed_ball_reference
+            if not scene or not scene.get('confirmed') or not 0 <= time.monotonic()-scene.get('received', 0) <= .5:
+                scene = {}
+            ball = scene.get('ball')
+            centre = self.placed_ball_reference
+            if centre is not None:
                 self.placed_ball_reference = None
                 self.opening_touch_required = False
-                self.describe('simple_open_play', 'estimated displacement reached 200mm')
-                await self.follow_kickoff(ball, centre, scene)
+                reason = 'track observed ball after opening kick' if ball else 'ball left view after completed pass'
+                self.describe('simple_open_play', reason)
+                if ball:
+                    await self.follow_kickoff(ball, centre, scene)
+                    return
+                self.pass_centre = centre
+                self.pass_segments_left = 3
+            await self.chase_pass_segment(scene, revision)
             return
 
         if self.placed_kickoff_started and self.opening_touch_required:
-            # The initial placement is no longer known after interrupted motion.
-            return
+            # Resume visual play after interrupted placement; retain the weak first touch.
+            self.placed_kickoff_started = False
 
         revision = self.g.revision
+        odom = getattr(self.g, 'odometry', None)
+        if self.empty_sectors >= 2 and odom and not self.opening_touch_required:
+            if await self.g._prepare(self.p, self.entry) and self.g._same_plan(revision):
+                await self.search_field(odom)
+            return
         # Moving opponents require a new visual check even on kickoff.
         scan_goals = not self.opening_touch_required and self.near and self.goal_scan_needed and time.monotonic()-self.last_goal_scan >= 2.
         if self.landing_pan is not None:
@@ -1287,9 +1895,13 @@ class SimpleFootball:
                 return
             self.ball_refresh_after = None
         if ball is None:
+            if self.near and await self.follow_hidden_ball(self.last_scene):
+                return
             if self.approach_glance_after != math.inf:
                 self.approach_glance_after = None
             self.leg_candidate = None
+            if not self.opening_touch_required and await self.approach_ball_region():
+                return
             self.forget_goal('ball lost')
             self.describe('simple_search', 'no fresh ball')
             if self.near and self.jumps >= 15:
@@ -1335,7 +1947,8 @@ class SimpleFootball:
                     x, y = scene['ball']
                     if abs(y) > .02:
                         self.last_ball_side = 1 if y > 0 else -1
-                    self.empty_sectors = 0
+                    self.empty_sectors = self.field_sector = 0
+                    self.field_sector_heading = None
                     self.log_search_found(pan, tilt, scene)
                     if not self.opening_touch_required and self.attack_axis is not None:
                         self.last_scene = scene
@@ -1352,18 +1965,35 @@ class SimpleFootball:
                     if not self.near or x <= 0:
                         await self.turn(math.atan2(y, x), alignment=self.near)
                     return
-            if self.opening_touch_required:
-                # A missed near-foot observation does not establish that the
-                # ball moved. Turning the body can drag the ball with a foot.
-                self.describe('simple_ball_unseen_hold',
-                              'ball not confirmed near feet; hold position and retry camera')
+            if self.opening_touch_required and await self.approach_ball_region():
+                return
+            odom = getattr(self.g, 'odometry', None)
+            if ((odom is None or odom.confidence == 'degraded')
+                    and time.monotonic() - self.last_usable_frame > 12):
+                # Turning the body cannot reveal a ball while the entire image
+                # is missing. Continue requesting views from this search sector.
+                self.describe('simple_search_no_image', 'no camera or reliable field pose; reacquire along goal bearing')
+                if not self.blind_heading_checked:
+                    self.blind_heading_checked = True
+                    heading = self.remembered_goal_heading()
+                    if heading is not None:
+                        yaw, _ = await self.g._imu()
+                        if self.g._same_plan(revision):
+                            await self.turn(wrap(heading-yaw))
+                await self.g._settle(.20)
                 return
             self.empty_sectors += 1
-            if self.near and self.empty_sectors == 1:
+            if self.opening_touch_required and self.empty_sectors == 1:
+                self.inspect_feet_first = True
+                return
+            if self.near and self.empty_sectors == 1 and not self.opening_touch_required:
                 self.inspect_feet_first = True
                 await self.jump('backward', 1.)
                 return
             odom = getattr(self.g, 'odometry', None)
+            if self.empty_sectors >= 2 and not self.opening_touch_required:
+                await self.search_field(odom)
+                return
             if (not self.near and odom and odom.confidence != 'degraded'
                     and self.empty_sectors % 3 != 0 and self.attack_axis is not None):
                 # Change the sightline when an opponent screens the distant ball.
@@ -1387,7 +2017,8 @@ class SimpleFootball:
             await self.search_sector()
             return
 
-        self.empty_sectors = 0
+        self.empty_sectors = self.field_sector = 0
+        self.field_sector_heading = None
         if (self.placed_kickoff_started or self.attack_axis is not None) and not self.opening_touch_required:
             await self.attack_after_pass(ball, goals, rechecked=rechecked)
             return
@@ -1603,7 +2234,7 @@ class SimpleFootball:
                             self.last_scene = None
                         return
                     self.describe('simple_kickoff_pass', 'soft diagonal kick')
-                    completed = await self.move('motion.kick', dict(leg=leg,
+                    completed = await self.strike(dict(leg=leg,
                         power=38, offset=max(-60, min(80, round(abs(y)*1000)-62)), soft=True))
                     if completed:
                         self.soft_touch_before = (x, y)
@@ -1689,7 +2320,7 @@ class SimpleFootball:
                 return
             power = 60 if kickoff else 100
             self.describe('simple_kick', f'foot={strike_leg} visual={visual_ready} approximate_goal={approximate} power={power}')
-            completed = await self.move('motion.kick', dict(leg=strike_leg, power=power,
+            completed = await self.strike(dict(leg=strike_leg, power=power,
                 offset=max(-60, min(80, int(abs(y)*1000)-62))))
             if completed:
                 self.near, self.jumps, self.leg_sign = False, 0, None
@@ -1759,7 +2390,7 @@ class SimpleFootball:
                     await self.turn(math.atan2(scene['ball'][1], scene['ball'][0]))
                     return
             self.empty_sectors += 1
-            if self.near and self.empty_sectors == 1:
+            if self.near and self.empty_sectors == 1 and not self.opening_touch_required:
                 self.inspect_feet_first = True
                 await self.jump('backward', 1.)
                 return

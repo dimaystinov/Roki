@@ -14,6 +14,21 @@ if sys.platform == 'win32' and any(a.startswith('--self-test-') for a in sys.arg
         sys.stderr.flush()
         os._exit(1)
     sys.excepthook = test_exception
+
+# The isolated updater runs before importing the packaged operator modules.
+if any(a.startswith('--upstream-') for a in sys.argv[1:]):
+    import os
+    if os.environ.get('ROKI_UPSTREAM_LOG'):
+        sys.stdout = sys.stderr = open(os.environ['ROKI_UPSTREAM_LOG'], 'w', encoding='utf-8', buffering=1)
+        import traceback
+        def upstream_exception(kind, value, tb):
+            traceback.print_exception(kind, value, tb)
+            sys.stderr.flush()
+            os._exit(1)
+        sys.excepthook = upstream_exception
+    from upstream_updater import main as upstream_main
+    raise SystemExit(upstream_main())
+
 import roki_operator
 from PySide6.QtCore import QTimer
 if sys.platform == 'win32' and any(a.startswith('--self-test-') for a in sys.argv):
@@ -72,4 +87,10 @@ def create_engine(controller):
 roki_operator.create_engine = create_engine
 if '--robot' not in sys.argv:
     sys.argv += ['--robot', '192.168.0.244']
+if gui_test:
+    # A running user instance must not turn a build probe into a false success.
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix='fpv-build-check-') as config:
+        sys.argv += ['--config-dir', config]
+        raise SystemExit(roki_operator.run_operator())
 raise SystemExit(roki_operator.main())

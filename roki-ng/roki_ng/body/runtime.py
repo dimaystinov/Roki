@@ -407,18 +407,22 @@ class Body:
             keep_crouch = boolean(args, 'keep_crouch', False)
             if self.pose != 'base_stand' and not (keep_crouch and self.pose == 'crouch'):
                 raise Fault('invalid_state', 'Game walking requires a prepared stance')
-            kind = choice(args, 'kind', None, ('omni', 'approach', 'around', 'verify', 'kickoff'))
+            kind = choice(args, 'kind', None, ('omni', 'approach', 'around', 'verify', 'kickoff', 'kickoff_arc'))
             options = {key: number(args, key, default, low, high) for key, default, low, high in (
                 ('distance_m', 0., -4., 4.), ('course', 0., -math.pi, math.pi),
                 ('heading', 0., -math.pi, math.pi), ('initial_heading', 0., -math.pi, math.pi),
                 ('yaw_offset', 0., -math.pi, math.pi), ('kick_heading', 0., -math.pi, math.pi),
                 ('x_m', 0., -4., 4.), ('y_m', 0., -4., 4.))}
+            options['trim_cycles'] = number(args, 'trim_cycles', 0, 0, 2, True)
             options['soft_touch'] = boolean(args, 'soft_touch', False)
             options['keep_crouch'] = keep_crouch
+            options['live_approach'] = boolean(args, 'live_approach', False)
             if 'stop_x_m' in args:
                 options['stop_x_m'] = number(args, 'stop_x_m', None, .08, .5)
             if 'target_y_m' in args:
                 options['target_y_m'] = number(args, 'target_y_m', None, -.5, .5)
+            if options['live_approach'] and (kind != 'approach' or 'stop_x_m' not in options or 'target_y_m' not in options):
+                raise Fault('invalid_argument', 'Live approach requires both foot target coordinates')
             options['invert'] = number(args, 'invert', 1, -1, 1, True)
             if options['invert'] not in (-1, 1):
                 raise Fault('invalid_argument', 'Kickoff direction must be -1 or 1')
@@ -514,7 +518,9 @@ class Body:
         ident = getattr(self, 'request_job_id', None) or -next_id()
         if getattr(self, 'football_arms', False) and op in (
                 'motion.pose', 'motion.kick', 'game.head', 'game.walk', 'game.jump'):
-            plan = self._guard_football_arms(plan)
+            if op != "game.head":
+                self.jump_arms_lowered = op == "game.jump"
+            plan = self._guard_football_arms(plan, lowered=getattr(self, "jump_arms_lowered", False))
         self.active, self.plan = ident, iter(plan)
         self.segment_active = False
         self.stop_requested = False
@@ -529,11 +535,15 @@ class Body:
             result.update(test=self.jobs[ident]['test'], progress=self.jobs[ident]['progress'])
         return result
 
-    def _guard_football_arms(self, plan):
+    def _guard_football_arms(self, plan, *, lowered=False):
         from roki_ng.body.motion.gait import WALK_CLAVICLE_RAD, WALK_ELBOW_RAD
         angles = [0.] * 21
-        angles[6], angles[17] = WALK_ELBOW_RAD, -WALK_ELBOW_RAD
-        angles[9], angles[20] = -WALK_CLAVICLE_RAD, WALK_CLAVICLE_RAD
+        if lowered:
+            # Straight elbows with a small shoulder offset keep the landing balanced.
+            angles[9], angles[20] = .30, -.30
+        else:
+            angles[6], angles[17] = WALK_ELBOW_RAD, -WALK_ELBOW_RAD
+            angles[9], angles[20] = -WALK_CLAVICLE_RAD, WALK_CLAVICLE_RAD
         targets = {(v.Id, v.Sio): v.Data for v in
                    self.model.mapping.targets(self.model, angles, scale=1698)
                    if 1 <= v.Id <= 4}
@@ -1161,12 +1171,13 @@ class Body:
             return None
         p, a = self.parameters, options
         recipes = {
-            'omni': lambda: legacy.omni(p, a['distance_m']*1000, a['course'], a['heading'], soft_touch=a.get('soft_touch', False)),
+            'omni': lambda: legacy.omni(p, a['distance_m']*1000, a['course'], a['heading'], soft_touch=a.get('soft_touch', False), trim_cycles=a.get('trim_cycles', 0)),
             'approach': lambda: legacy.approach(p, a['distance_m'], a['heading'], ball,
                                                  stop_x_m=a.get('stop_x_m'),
-                                                 target_y_m=a.get('target_y_m')),
+                                                 target_y_m=a.get('target_y_m'), live_approach=a.get('live_approach', False)),
             'verify': lambda: legacy.verify(p, a['heading'], ball),
             'around': lambda: legacy.around(p, a['distance_m'], a['course'], a['initial_heading'], a['kick_heading'], ball),
+            'kickoff_arc': lambda: legacy.kickoff_arc(p, a['distance_m'], a['course'], a['invert']),
             'kickoff': lambda: legacy.kickoff(p, a['invert'], ball),
         }
         prepared, completed, last = False, 0, None
@@ -1201,6 +1212,11 @@ class Body:
                 if not (yield from self.wait_for_imu()):
                     break
                 quaternion = self.read_body_quaternion()
+            if a.get('live_approach'):
+                order = legacy.live_ball_cycle(p, ball(), a['stop_x_m'], a['target_y_m'],
+                                              order.index, order.total, order.right, order.heading)
+                if order is None:
+                    break
             yaw = quaternion_yaw(quaternion)
             field_yaw = wrap(yaw+a['yaw_offset'])
             if kind == 'approach':
@@ -1215,6 +1231,9 @@ class Body:
             if kind == 'approach':
                 self.log('INFO', f'Approach cycle={order.index} step_mm={order.step:.3f} '
                          f'yaw={yaw:.4f} target={approach_heading:.4f} turn={rotation:.4f}')
+            frame_stamp = self.game_ball_stamp
+            if a.get('live_approach'):
+                self.jobs[self.active]['last_approach_frame'] = frame_stamp
             self.segment_active = True
             step, side = yield from self._execute_walk_cycle(
                 order.step, order.side, rotation*(1 if order.right else -1),
@@ -1229,7 +1248,7 @@ class Body:
             last = order
             if kind == 'approach' and 'stop_x_m' in a:
                 deadline = time.monotonic() + .65
-                while ball() is None and time.monotonic() < deadline and not self.stop_requested:
+                while (ball() is None or (a.get('live_approach') and self.game_ball_stamp <= frame_stamp)) and time.monotonic() < deadline and not self.stop_requested:
                     yield 'sleep', .025
         if prepared:
             self.segment_active = True

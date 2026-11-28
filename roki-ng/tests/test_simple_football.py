@@ -1104,3 +1104,263 @@ def test_lost_close_ball_searches_for_rebound_on_last_seen_side(tmp_path):
     assert all(not c.kwargs['wait_ball'] for c in calls[1:])
     strategy.search_sector.assert_awaited_once()
     assert not commands(game)
+
+
+@pytest.mark.parametrize('scene_kind', ['clear', 'opponent', 'blocked', 'stale', 'near'])
+def test_kickoff_follow_when_ball_leaves_view(tmp_path, scene_kind):
+    strategy, game = harness(tmp_path)
+    strategy.kickoff_pending = False
+    strategy.p['field.geometry']['circle_diameter'] = .60
+    strategy.placed_ball_reference = (.12, -.05)
+    game._prepare = AsyncMock(return_value=True)
+    obstacles = {'opponent': [((.21, 0.), .06)], 'blocked': [
+        ((.14, y), .13) for y in (-.12, 0., .12)]}.get(scene_kind, [])
+    scene = dict(valid=True, confirmed=True, ball=None, parts=[], frame_obstacles=obstacles,
+                 received=time.monotonic() - (2 if scene_kind == 'stale' else 0))
+    strategy.look = AsyncMock(return_value=scene)
+    strategy.walk = AsyncMock(return_value=True)
+    asyncio.run(strategy.step())
+    if scene_kind in ('clear', 'near', 'opponent'):
+        distance, angle = strategy.walk.await_args.args
+        assert 0 < distance <= .30
+        if scene_kind != 'opponent':
+            assert distance == pytest.approx(.30)
+        assert (abs(angle) > .1) == (scene_kind == 'opponent')
+        assert strategy.pass_segments_left == 2
+        if scene_kind == 'near':
+            scene['ball'] = (.12, -.05)
+            asyncio.run(strategy.step())
+            assert strategy.pass_segments_left == 0
+            strategy.walk.assert_awaited_once()
+    else:
+        strategy.walk.assert_not_awaited()
+    # The opening command was already sent. A stale frame cannot prove contact.
+    assert not strategy.opening_touch_required
+
+
+def test_placed_pass_walks_until_right_toe_in_reach_and_rechecks_miss(tmp_path):
+    s, game = harness(tmp_path)
+    s.kickoff_pending = False
+    s.pending_toe_pass = (50., 52.)
+    game._prepare = AsyncMock(return_value=True)
+    near = (.05+s.p['game.ball_diameter_m']/2+.020, -.052)
+    def frame(ball):
+        return dict(valid=True, confirmed=True, ball=ball, received=time.monotonic())
+    s.look = AsyncMock(side_effect=lambda *a, **kw: frame(s.test_ball))
+    s.walk = AsyncMock(return_value=True)
+    s.move = AsyncMock(return_value=True)
+    s.test_ball = (near[0]+.08,near[1])
+    asyncio.run(s.step())
+    s.walk.assert_awaited_once()
+    s.move.assert_not_awaited()
+    s.test_ball = near
+    asyncio.run(s.step())
+    assert s.move.await_args.args[0] == 'motion.kick' and s.placed_ball_reference == near
+    asyncio.run(s.step())
+    assert s.pending_toe_pass and s.placed_ball_reference is None
+    s.move.assert_awaited_once()
+
+
+@pytest.mark.parametrize('opponent_y,operation', [(.20, 'motion.kick'), (.85, 'game.jump')])
+def test_pressure_at_ball_changes_free_window_priority(tmp_path, opponent_y, operation):
+    ball = (.115, -.052)
+    strategy, game = harness(tmp_path, ball=ball)
+    strategy.opening_touch_required = False
+    strategy.attack_axis = 0.
+    strategy.p['game.soft_kick.right.toe_x_mm'] = 50.
+    strategy.last_scene = dict(confirmed=True, received=time.monotonic(),
+                               parts=[dict(kind='obstacle', points=[(.13, opponent_y)], radius=.08)])
+    goal = dict(colour=strategy.enemy, shootable=True, ends=[[1., -.5], [1., .5]],
+                opening_source={'occupied': [[.65, .90]]})
+    asyncio.run(strategy.attack_after_pass(ball, [goal], rechecked=True))
+    assert commands(game)[0][0] == operation
+
+
+def test_ball_region_uses_field_velocity_and_consumes_estimate(tmp_path):
+    from roki_ng.body.motion.odometry import GameOdometry
+    strategy, game = harness(tmp_path)
+    odom = game.odometry = GameOdometry(strategy.p, 'center', 0)
+    now = time.monotonic()
+    strategy.remember_near_ball(dict(confirmed=True, received=now-.8, ball=(.6, 0)))
+    strategy.remember_near_ball(dict(confirmed=True, received=now-.4, ball=(.6, .10)))
+    strategy.walk = AsyncMock(return_value=True)
+    assert asyncio.run(strategy.approach_ball_region())
+    distance, bearing = strategy.walk.await_args.args
+    assert 0 < distance <= .25 and bearing > math.atan2(.10,.6)
+    assert not asyncio.run(strategy.approach_ball_region())
+    strategy.remember_near_ball(dict(confirmed=True, received=now, ball=(.5, .1)))
+    odom.pose_revision += 1
+    assert not asyncio.run(strategy.approach_ball_region())
+
+
+def test_missing_image_after_opening_resumes_pursuit_without_claiming_contact(tmp_path):
+    strategy, game = harness(tmp_path)
+    strategy.kick_check = (None, (.12,-.05), 50, 50)
+    strategy.look = AsyncMock(return_value=None)
+    asyncio.run(strategy.check_opening_kick(game.revision))
+    assert strategy.kick_check is None and strategy.placed_ball_reference == (.12,-.05)
+    assert game.info['phase'] == 'simple_kick_unconfirmed'
+
+
+def test_no_prediction_walk_through_observed_robot(tmp_path):
+    from roki_ng.body.motion.odometry import GameOdometry
+    strategy, game = harness(tmp_path)
+    game.odometry = GameOdometry(strategy.p, 'center', 0)
+    strategy.remember_near_ball(dict(confirmed=True, received=time.monotonic(), ball=(.55,0)))
+    strategy.last_scene = dict(parts=[dict(kind='obstacle', points=[(.18,0)], radius=.10)])
+    strategy.walk = AsyncMock()
+    assert not asyncio.run(strategy.approach_ball_region())
+    strategy.walk.assert_not_awaited()
+
+
+def test_recent_relative_ball_survives_uncertain_global_position(tmp_path):
+    from roki_ng.body.motion.odometry import GameOdometry
+    strategy, game = harness(tmp_path)
+    odom = game.odometry = GameOdometry(strategy.p, 'center', 0)
+    odom.uncertain('fall')
+    strategy.remember_near_ball(dict(confirmed=True, received=time.monotonic(), ball=(.45, .05)))
+    strategy.walk = AsyncMock(return_value=True)
+    assert asyncio.run(strategy.approach_ball_region())
+    assert strategy.walk.await_args.args[0] <= .12
+    strategy.remember_near_ball(dict(confirmed=True, received=time.monotonic(), ball=(.45, .05)))
+    odom.path += .20
+    assert not asyncio.run(strategy.approach_ball_region())
+
+
+def test_toe_check_uses_first_current_ball_even_if_toe_missing(tmp_path):
+    strategy, game = harness(tmp_path)
+    strategy.pending_toe_pass = (55, 52)
+    samples = []
+
+    async def observe(role, op, args=None):
+        if op == 'football.status':
+            samples.append(op)
+            return dict(valid=True, confirmed=False, pose_id=strategy.pose_id,
+                        received=time.monotonic(), ball=(.119, -.052), parts=[])
+        return {}
+    game._call = observe
+    scene = asyncio.run(strategy.look(0, -2100))
+    assert samples == ['football.status']
+    assert scene['ball'] and not scene.get('foot')
+
+
+def test_open_play_uses_start_imu_without_map_posts_or_toe(tmp_path):
+    strategy, game = harness(tmp_path)
+    strategy.opening_touch_required = False
+    strategy.p['game.soft_kick.right.toe_x_mm'] = 50.
+    strategy.gaze_imu = lambda: (0., 7)
+    strategy.expected_gaze.remember('start_goal', (1., 0.), yaw=0., epoch=7, now=time.monotonic())
+    strategy.last_scene = dict(confirmed=True, received=time.monotonic(), parts=[])
+    asyncio.run(strategy.attack_after_pass((.115, -.052), []))
+    assert commands(game)[0][0] == 'motion.kick'
+    strategy.gaze_imu = lambda: (0., 8)
+    assert strategy.remembered_goal_heading() is None
+
+
+def test_prolonged_blind_search_after_fall_keeps_retrying_without_spinning(tmp_path):
+    strategy, game = harness(tmp_path, ball=None, goals=[], entry='center', delay=0)
+    strategy.kickoff_pending = strategy.opening_touch_required = False
+    strategy.last_usable_frame = time.monotonic()-20
+    strategy.remembered_goal_heading = lambda: .5
+    strategy.look = AsyncMock(return_value=None)
+    strategy.turn = AsyncMock(return_value=True)
+    strategy.search_sector = AsyncMock()
+
+    async def run():
+        await strategy.step()
+        await strategy.step()
+    asyncio.run(run())
+    assert game.info['phase'] == 'simple_search_no_image'
+    assert strategy.look.await_count > 1
+    strategy.turn.assert_awaited_once()
+    strategy.search_sector.assert_not_awaited()
+
+
+def test_open_play_keeps_rolling_ball_destination_across_turn(tmp_path):
+    from roki_ng.body.motion.odometry import GameOdometry
+    strategy, game = harness(tmp_path)
+    strategy.opening_touch_required = False
+    odom = game.odometry = GameOdometry(strategy.p, 'center', 0)
+    now = time.monotonic()
+    for age, y in ((.3, .24), (.1, .55)):
+        strategy.remember_near_ball(dict(confirmed=True, received=now-age, ball=(.18,y)))
+    track = strategy.search_track
+    assert math.isclose(math.hypot(*track.velocity), 1.55, abs_tol=.001)
+    strategy.turn = AsyncMock(return_value=True)
+    strategy.walk = AsyncMock(return_value=True)
+    assert asyncio.run(strategy.approach_ball_region())
+    assert strategy.search_track is track
+    odom.yaw = (odom.yaw + strategy.turn.await_args.args[0] + math.pi) % (2*math.pi) - math.pi
+    assert asyncio.run(strategy.approach_ball_region())
+    strategy.walk.assert_awaited_once()
+    assert strategy.search_track is None
+
+
+def test_measured_roll_uses_frames_from_same_camera_pose(tmp_path):
+    tracker = SceneTracker()
+    frame = dict(pose_id=4, sequence=10, received=8., ball=(.5, .10), parts=[])
+    assert tracker.update(frame)['roll_m_s'] is None
+    tracked = tracker.update(dict(frame, sequence=11, received=8.1, ball=(.5, .14)))
+    assert tracked['roll_m_s'] == pytest.approx((0., .4))
+
+    from roki_ng.body.motion.odometry import GameOdometry
+    strategy, game = harness(tmp_path)
+    odom = game.odometry = GameOdometry(strategy.p, 'center', 0)
+    odom.yaw = math.pi/2
+    strategy.remember_near_ball(tracked)
+    assert strategy.search_track.velocity == (0., 0.)  # Original opening behaviour.
+    strategy.opening_touch_required = False
+    strategy.search_track = None
+    strategy.remember_near_ball(dict(frame, confirmed=True, ball=(.5, .12)))
+    strategy.remember_near_ball(tracked)
+    assert strategy.search_track.velocity == pytest.approx((-.3, 0.))
+
+    assert tracker.update(dict(frame, pose_id=5, sequence=12, received=8.2))['roll_m_s'] is None
+
+
+def test_repeated_empty_search_walks_to_circle_then_scans_both_halves(tmp_path):
+    from roki_ng.body.motion.odometry import GameOdometry
+    strategy, game = harness(tmp_path, ball=None, goals=[])
+    strategy.opening_touch_required = strategy.kickoff_pending = False
+    strategy.look = AsyncMock(return_value={'confirmed': True, 'parts': []})
+    strategy.empty_sectors = 1
+    odom = game.odometry = GameOdometry(strategy.p, 'center', 0)
+    odom.x, odom.y, odom.yaw = .8, 0., math.pi
+    odom.uncertain('fallen')
+    asyncio.run(strategy.step())
+    op, args = commands(game)[0]
+    assert op == 'game.walk' and args['distance_m'] == .16
+    assert abs(args['course']) < .001
+    odom.x = 0.
+    strategy.walk = AsyncMock(return_value=True)
+    strategy.turn = AsyncMock(return_value=True)
+    async def sweep():
+        for sector in range(6):
+            await strategy.search_field(odom)
+            error = strategy.turn.await_args.args[0]
+            assert math.degrees(error) == pytest.approx(60.)
+            odom.yaw = (odom.yaw+error+math.pi)%(2*math.pi)-math.pi
+        assert strategy.field_sector == 6 and strategy.field_sector_heading is None
+        strategy.walk.assert_not_awaited()
+        odom.yaw = 0.
+        await strategy.search_field(odom)
+        strategy.walk.assert_awaited_once()
+    asyncio.run(sweep())
+
+
+@pytest.mark.parametrize('direction', [-1, 1])
+def test_centre_arc_changes_heading_during_one_forward_gait(tmp_path, direction):
+    from roki_ng.body.motion.legacy_game_motion import kickoff_arc
+    strategy, game = harness(tmp_path, delay=0)
+    strategy.p['game.simple_football.kickoff_side'] = 'left' if direction==1 else 'right'
+    strategy.place_and_pass = AsyncMock()
+    asyncio.run(strategy.placed_kickoff())
+    walks = [args for op,args in commands(game) if op=='game.walk']
+    assert len(walks)==1 and walks[0]['kind']=='kickoff_arc'
+    args = walks[0]
+    orders = list(kickoff_arc(strategy.p, args['distance_m'], args['course'], args['invert']))
+    advance = [c for c in orders if c.step > 0]
+    assert len(advance) >= 3
+    assert all(direction*(b.heading-a.heading)>0 for a,b in zip(advance,advance[1:]))
+    assert direction*(advance[-1].heading-advance[0].heading) > math.radians(45)
+    strategy.place_and_pass.assert_awaited_once()

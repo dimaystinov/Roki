@@ -41,7 +41,7 @@ class Cycle:
     yaw_gain: float = 1.
 
 
-def omni(p, distance_mm, direction, heading, *, one_off=True, soft_touch=False):
+def omni(p, distance_mm, direction, heading, *, one_off=True, soft_touch=False, trim_cycles=0):
     """near_distance_omni_motion: preserve original count and ramp formulas."""
     first, stride, right_yield, left_yield = yields(p)
     displacement = distance_mm * math.sin(direction)
@@ -57,6 +57,8 @@ def omni(p, distance_mm, direction, heading, *, one_off=True, soft_touch=False):
     decelerate = step > 15 and total > 4
     if decelerate:
         total += 1
+    # Shorten the cruise while preserving the entry and braking cycles.
+    total -= min(int(trim_cycles), max(0, total - (4 if decelerate else 2)))
     for i in range(bounded(total)):
         current = step/4 if i == 0 else step/2 if i == 1 else step
         if decelerate:
@@ -65,7 +67,24 @@ def omni(p, distance_mm, direction, heading, *, one_off=True, soft_touch=False):
         yield Cycle(current, side, heading, i, total+(not one_off), right)
 
 
-def approach(p, distance, heading, ball, *, stop_x_m=None, target_y_m=None):
+def live_ball_cycle(p, observed, target_x, target_y, index, total, right, heading):
+    if observed is None:
+        return None
+    x, y = observed
+    dx, dy = x-target_x, y-target_y
+    if abs(y) > .30 or (abs(dx) <= .014 and abs(dy) <= .020):
+        return None
+    _, stride, _, _ = yields(p)
+    # Align sideways before closing the last centimetres, without stepping
+    # backwards merely because the ball is wide of the striking foot.
+    advance = max(0., dx-max(0., abs(dy)-.020)) if dx > 0 else dx
+    limit = min(30., .35*p['walk.max_step_mm'])
+    step = clip(advance*1000*64/stride*.70, limit)*min(1., (index+1)/3)
+    side = clip(dy*400*(-1 if right else 1), 16.)
+    return Cycle(step, side, heading, index, total, right=right)
+
+
+def approach(p, distance, heading, ball, *, stop_x_m=None, target_y_m=None, live_approach=False):
     """far_distance_straight_approach_streaming, with bounded live feedback."""
     # Match the 35% manual walking speed tested on the field.
     forward_limit = min(30., .35*p['walk.max_step_mm'])
@@ -83,6 +102,12 @@ def approach(p, distance, heading, ball, *, stop_x_m=None, target_y_m=None):
             lateral = 0. if target_y_m is None else y-target_y_m
             if support_right is None:
                 support_right = lateral <= 0
+            if live_approach:
+                order = live_ball_cycle(p, observed, stop_x_m, target_y_m, i, total, support_right, heading)
+                if order is None:
+                    break
+                yield order
+                continue
             remaining = x-stop_x_m
             if abs(y) > .30:
                 break
@@ -186,6 +211,20 @@ def around(p, distance, course, initial_heading, kick_heading, ball):
             break
         step = clip(observed[0]*1000-p['game.kick_approach_mm'], 30)
         yield Cycle(step, 15, reference+i*increment, i, total, right)
+
+
+def kickoff_arc(p, chord_m, course, direction):
+    """Scaled kick_off_ride: turn onto the tangent and sweep 60° while advancing."""
+    half = math.radians(30)
+    tangent = course - direction*half
+    entry = max(1, math.ceil(abs(tangent)/.2))
+    for i in range(entry):
+        yield Cycle(0, 0, tangent*(i+1)/entry, i, entry+1)
+    arc_mm = chord_m*1000*half/math.sin(half)
+    for cycle in omni(p, arc_mm, 0., 0.):
+        fraction = (cycle.index+.5)/cycle.total
+        yield Cycle(cycle.step, 0., tangent + direction*2*half*fraction,
+                    cycle.index, cycle.total, cycle.right)
 
 
 def kickoff(p, invert, ball):

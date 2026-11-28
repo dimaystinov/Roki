@@ -8,26 +8,32 @@ from pathlib import Path
 from unittest.mock import patch
 
 import sim_roki2 as sim
-from sim_visual_dribble import VisualDribble
+from sim_visual_dribble import VisualDribble, VisualOpening
 
 
 class Finished(Exception):
     pass
 
 
-async def trial(side, lateral, heading, vision_first=False, dribble=False, open_play=False, distance=.60, ball_x=0., display=None):
+async def trial(side, lateral, heading, vision_first=False, dribble=False, open_play=False, distance=.60, ball_x=0., display=None, visual_opening=False, dim=False, opening_strike=None):
     settings = sim.load_settings(sim.SETTINGS)
     settings["layout"].update(ball_spawn_xy=[ball_x, 0.], robot_spawn_xy=[ball_x+distance, lateral], robot_yaw_deg=180.+heading)
+    if visual_opening:
+        settings['training']['extra_balls'] = True
+    if dim:
+        settings['lighting'].update(sun=.65, fill=.45, ambient=.18)
     p = sim.sim_parameters(settings)
     profile = sim.HERE.parents[1] / "sim/.local-state/parameters.json"
     if profile.exists():
         p.update(json.loads(profile.read_text()))
     p.update({"game.simple_football.kickoff_side": side, "match.own_goal": 0})
+    if opening_strike is not None:
+        p["game.simple_football.opening_strike"] = opening_strike
     if vision_first:
         p["game.forward.kick_off_ride"] = False
     world = sim.World(settings=settings, parameters=p)
     game = sim.GameAdapter(world, p)
-    strategy = (VisualDribble if dribble else sim.SimpleFootball)(game, p, "center", 0)
+    strategy = (VisualOpening if visual_opening else VisualDribble if dribble else sim.SimpleFootball)(game, p, "center", 0)
     if open_play:
         strategy.opening_touch_required = strategy.kickoff_pending = False
     foot_bodies = {world.model.joint(f"{leg}_ankle_roll_joint").bodyid.item(): leg for leg in ("left", "right")}
@@ -49,11 +55,19 @@ async def trial(side, lateral, heading, vision_first=False, dribble=False, open_
     original_move = game._move
     async def move(op, args, **kwargs):
         nonlocal kick_commands, active_kick
-        if op == "motion.kick":
+        strike = op == "motion.kick" or (op == "game.jump" and game.info["phase"] == "strike_jump")
+        if strike:
             kick_commands += 1
-            active_kick = args.get("leg")
+            active_kick = args.get("leg", "jump")
         try:
-            return await original_move(op, args, **kwargs)
+            result = await original_move(op, args, **kwargs)
+            if visual_opening and strike and result and (op == 'motion.kick' or any(
+                    contact[2] == 'jump' for contact in foot_contacts)):
+                active_kick = None
+                for _ in range(30):
+                    advance(.02)
+                raise Finished('kick_completed')
+            return result
         finally:
             active_kick = None
 
@@ -90,7 +104,7 @@ async def trial(side, lateral, heading, vision_first=False, dribble=False, open_
         last_x = x
         if world.data.qpos[2] < .17:
             raise Finished("fall")
-        if world.data.time >= 90:
+        if world.data.time >= (25 if visual_opening else 90):
             raise Finished("time")
     async def delay(dt, *_args, **_kwargs):
         if not world.motion_lock.locked():
@@ -111,7 +125,7 @@ async def trial(side, lateral, heading, vision_first=False, dribble=False, open_
             result = exc.code
         finally:
             world.renderer.close()
-    return dict(ball_start_x_m=ball_x,open_play=open_play,start_distance_m=distance,foot_contacts=foot_contacts,dribble=dribble,vision_first=vision_first,side=side,start_y=lateral,heading_offset_deg=heading,result=result,
+    return dict(visual_opening=visual_opening, dim=dim, ball_start_x_m=ball_x,open_play=open_play,start_distance_m=distance,foot_contacts=foot_contacts,dribble=dribble,vision_first=vision_first,side=side,start_y=lateral,heading_offset_deg=heading,result=result,
                 seconds=round(world.data.time,2),contact=touched,touches=touches,kick_commands=kick_commands,
                 closest_body_to_ball_m=round(min_range,3),max_blue_progress_m=round(max_progress,3),
                 ball_end_xy=world.data.qpos[world.ball_qpos:world.ball_qpos+2].tolist(),
@@ -121,6 +135,7 @@ async def trial(side, lateral, heading, vision_first=False, dribble=False, open_
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output",type=Path)
+    parser.add_argument("--visual-opening", action="store_true", help="Ten first-strike trials with three balls, clutter, and varied lighting")
     parser.add_argument("--vision-first", action="store_true")
     parser.add_argument("--dribble", action="store_true")
     parser.add_argument("--open-play", action="store_true", help="Test the production strategy after kickoff at ten ball placements")
@@ -128,6 +143,12 @@ def main():
     if args.open_play and (args.vision_first or args.dribble):
         parser.error("--open-play tests the production strategy")
     with args.output.open("x") as out:
+        if args.visual_opening:
+            for dim in (False, True):
+                for distance, lateral, heading in ((.30,0,0),(.32,0,0),(.30,.02,0),(.30,-.02,0),(.30,0,5)):
+                    result = asyncio.run(trial('left', lateral, heading, distance=distance, visual_opening=True, dim=dim))
+                    print(json.dumps(result), file=out, flush=True)
+            return
         if args.open_play:
             placements = ((.60,0,0), (.60,.05,5), (.60,-.05,-5), (.35,0,0),
                           (.35,.045,0), (.35,-.045,0), (.18,.045,0), (.18,-.045,0),

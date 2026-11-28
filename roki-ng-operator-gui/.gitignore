@@ -17,3 +17,5 @@ sim/fpv_profile/
 /sim/.local-state/
 
 /sim/.local-state-training-*/
+
+/.deps

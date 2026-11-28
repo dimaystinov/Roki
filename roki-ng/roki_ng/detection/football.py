@@ -41,15 +41,17 @@ def plane_point(projector, pixel, q, geometry, z=0.):
     return point
 
 
-def ball_at_foot(image, rect):
+def toe_tips(image):
     """Use the two dark toe tips in a centred downward view of the Roki2 body."""
     import cv2
     import numpy as np
     h, w = image.shape[:2]
     top = round(.53*h)
-    crop = image[top:round(.76*h), round(.33*w):round(.65*w)]
+    crop = image[top:round(.78*h), round(.32*w):round(.68*w)]
     hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
     dark = cv2.inRange(hsv, (0, 0, 0), (179, 115, 86))
+    # Shaded turf can be as dark as the sole but retains its green/cyan hue.
+    dark[cv2.inRange(hsv, (35, 50, 0), (100, 255, 255)) != 0] = 0
     dark = cv2.morphologyEx(dark, cv2.MORPH_OPEN,
                             np.ones((max(2, h//100), max(3, w//80)), np.uint8))
     profile = np.where(dark.any(axis=0), dark.argmax(axis=0), len(dark))
@@ -60,13 +62,21 @@ def ball_at_foot(image, rect):
     edges = np.where(np.diff(np.pad(raised, (1, 1))))[0]
     tips = []
     for a, b in zip(edges[::2], edges[1::2]):
-        if .045*w <= b-a <= .105*w:
-            tips.append([round(.33*w)+int(a), top+int(np.median(profile[a:b])),
-                         round(.33*w)+int(b)])
+        if .045*w <= b-a <= .12*w:
+            tips.append([round(.32*w)+int(a), top+int(np.median(profile[a:b])),
+                         round(.32*w)+int(b)])
     if len(tips) != 2:
         return None
     left, right = tips
-    if not (.08*w < right[0]-left[0] < .17*w and abs(left[1]-right[1]) < .035*h):
+    if not (.08*w < right[0]-left[0] < .20*w and abs(left[1]-right[1]) < .035*h):
+        return None
+    return tips
+
+
+def ball_at_foot(image, rect, *, tips=None):
+    if tips is None:
+        tips = toe_tips(image)
+    if tips is None:
         return None
     x1, y1, x2, y2 = rect
     cx = (x1+x2)/2
@@ -282,6 +292,43 @@ def field_obstacles(lab, turf, white, p, projector, q, geometry):
     return parts
 
 
+def painted_box_at_posts(lab, turf, params, left, right):
+    """A turf-filled enclosure just in front of both posts corroborates the goal."""
+    import cv2
+    import numpy as np
+    from roki_ng.vision.colour_masks import bounds
+    span = right[0] - left[0]
+    if span < 40:
+        return False
+    x0 = max(0, int(left[0] - .55*span))
+    x1 = min(lab.shape[1], int(right[0] + .55*span))
+    y0 = max(0, int(min(left[1], right[1]) - .04*span))
+    y1 = min(lab.shape[0], int(max(left[1], right[1]) + .55*span))
+    if x0 >= x1 or y0 >= y1:
+        return False
+    low, high = bounds(params, 'white_marking')
+    # Narrow paint mixes with the darker turf within a camera pixel.
+    paint = cv2.inRange(lab[y0:y1,x0:x1], (max(0,low[0]-24), *low[1:]), high)
+    paint = cv2.morphologyEx(paint, cv2.MORPH_CLOSE, np.ones((3,3),np.uint8))
+    contours, tree = cv2.findContours(paint, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+    for i, contour in enumerate(contours):
+        if tree[0,i,3] < 0:
+            continue
+        x,y,w,h = cv2.boundingRect(contour)
+        if not (.9*span <= w <= 1.8*span and 3 <= h <= .45*span
+                and x+x0 <= left[0]+.1*span and x+x0+w >= right[0]-.1*span
+                and y+y0+h > max(left[1],right[1])):
+            continue
+        area = cv2.contourArea(contour)
+        if area < .35*w*h:
+            continue
+        interior = np.zeros((h,w),np.uint8)
+        cv2.drawContours(interior,[contour-np.array((x,y),np.int32)],-1,1,-1)
+        if turf[y0+y:y0+y+h,x0+x:x0+x+w][interior!=0].mean() >= .6:
+            return True
+    return False
+
+
 def goal_box_support(ends, profiles, colour, paint, projector, q, geometry):
     """Look for the mapped front edge and a return of the penalty rectangle."""
     import numpy as np
@@ -335,7 +382,106 @@ def goal_box_support(ends, profiles, colour, paint, projector, q, geometry):
     return False
 
 
-def goal_parts(image, p, projector, q, geometry, *, bearing_only=False):
+def field_goal_hints(lab, turf, p, projector, q, geometry):
+    """Uncoloured field landmarks predict a goal direction, never a free shooting lane."""
+    import cv2
+    import numpy as np
+    from roki_ng.vision.colour_masks import bounds
+    low, high = bounds(p, 'white_marking')
+    paint = cv2.inRange(lab, (max(0, low[0]-24), *low[1:]), high)
+    paint = cv2.morphologyEx(paint, cv2.MORPH_CLOSE, np.ones((3,3), np.uint8))
+    contours, hierarchy = cv2.findContours(paint, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+    marks = [v for k,v in p.items() if k.startswith('field.mark.') and v['enabled']]
+    goal = p.get('field.goal.0')
+    if not goal:
+        return []
+    row = sorted((m for m in marks if m['kind'] in ('cross','disk') and
+                  m['x']*goal['x'] > 0), key=lambda m:m['y'])
+    hints, dots = [], []
+    def ground(u,v):
+        return np.asarray(plane_point(projector,(int(u),int(v)),q,geometry))
+    for i,c in enumerate(contours):
+        x,y,w,h = cv2.boundingRect(c)
+        if min(x,y)<2 or x+w>=lab.shape[1]-1 or y+h>=lab.shape[0]-1:
+            continue
+        try:
+            if hierarchy[0,i,3] >= 0 and w>=40 and 4<=h<w*.65 and cv2.contourArea(c)>.32*w*h:
+                if turf[y:y+h,x:x+w].mean()<.50:
+                    continue
+                pts=c[:,0,:]
+                sides=[pts[pts[:,0]<=x+.08*w],pts[pts[:,0]>=x+.92*w]]
+                a,b=[ground(*np.median(edge,axis=0)) for edge in sides]
+                across=b-a
+                width=float(np.linalg.norm(across))
+                if not .85*goal['width']<width<1.8*goal['width']:
+                    continue
+                if not .065<np.linalg.norm(ground(x+w/2,y)-ground(x+w/2,y+h-1))<.8:
+                    continue
+                hints.append(dict(kind='field_box',colour='neutral',points=[((a+b)/2).tolist()],rect=[x,y,x+w,y+h]))
+            elif hierarchy[0,i,3]<0 and 3<=w<=55 and 3<=h<=48 and .55<w/h<4.5:
+                surround=turf[max(0,y-h):y+2*h,max(0,x-w):x+2*w]
+                if surround.mean()>.65:
+                    dots.append((ground(x+w/2,y+h/2),[x,y,x+w,y+h]))
+        except ValueError:
+            continue
+    if len(row)==3 and len(dots)<=24 and max(m['x'] for m in row)-min(m['x'] for m in row)<.05:
+        spacing=(row[2]['y']-row[0]['y'])/2
+        if spacing>.1 and abs(row[1]['y']-(row[2]['y']+row[0]['y'])/2)<.05:
+            for triple in combinations(dots,3):
+                ordered=sorted(triple,key=lambda item:item[1][0])
+                (a,_),(mid,_),(b,_)=ordered
+                width=np.linalg.norm(b-a)
+                if abs(width-2*spacing)>.32*spacing or np.linalg.norm(mid-(a+b)/2)>.16*spacing:
+                    continue
+                normal=np.array([a[1]-b[1],b[0]-a[0]])/width
+                # Both goal directions are possible from symmetric paint.
+                offset=abs(goal['x']-row[1]['x'])
+                rects=np.asarray([r for _,r in ordered])
+                rect=[*rects[:,:2].min(axis=0).tolist(),*rects[:,2:].max(axis=0).tolist()]
+                for sign in (-1,1):
+                    target=mid+sign*offset*normal
+                    hints.append(dict(kind='cross_row',colour='neutral',points=[target.tolist()],normal=math.atan2(sign*normal[1],sign*normal[0]),rect=rect))
+    return hints
+
+
+def measured_uprights(raw, image, turf, projector, q, geometry, spec):
+    """Match long pipe edges to a ground-supported base and the physical goal height."""
+    import cv2
+    import numpy as np
+    # A cabinet of the same hue can merge both posts with the background mask.
+    # Brightness edges still separate a round pipe from a flat painted surface.
+    edges = cv2.Canny(image, 45, 120)
+    edges &= cv2.dilate(raw, np.ones((5, 5), np.uint8))
+    lines = cv2.HoughLinesP(edges, 1, np.pi/180, 40, minLineLength=55, maxLineGap=12)
+    posts = []
+    candidates = () if lines is None else sorted(lines.reshape(-1,4), key=lambda line: max(line[1],line[3]), reverse=True)
+    for x1,y1,x2,y2 in candidates:
+        if y1 > y2:
+            x1,y1,x2,y2 = x2,y2,x1,y1
+        if y2-y1 < 55 or abs(x2-x1) > .24*(y2-y1):
+            continue
+        u,v = int(x2),int(y2)
+        strip = slice(max(0,u-9),u+10)
+        if not turf[v:min(v+26,len(turf)),strip].any():
+            continue
+        rows = np.linspace(y1,y2,20).astype(int)
+        cols = np.linspace(x1,x2,20).astype(int)
+        if np.mean([raw[y,max(0,x-5):x+6].any() for x,y in zip(cols,rows)]) < .85:
+            continue
+        try:
+            base = plane_point(projector,(u,v),q,geometry)
+            ray = projector._pixel_ray((int(x1),int(y1)),q)
+        except ValueError:
+            continue
+        height = geometry['height'] + ray[2]*math.hypot(base[0]-geometry['x'],base[1]-geometry['y'])/max(1e-8,math.hypot(*ray[:2]))
+        if not .70*spec['height'] <= height <= 1.25*spec['height']:
+            continue
+        if not any(abs(u-other[0]) < 20 for other in posts):
+            posts.append((u,v,int(y1),base))
+    return posts
+
+
+def goal_parts(image, p, projector, q, geometry, *, bearing_only=False, colours=None, feet_only=False):
     """Colour regions for steering; two image-side boundaries for a strike.
 
     Require a field-supported upright before reporting even a colour hint.
@@ -344,8 +490,8 @@ def goal_parts(image, p, projector, q, geometry, *, bearing_only=False):
     import cv2
     import numpy as np
     from roki_ng.vision.colour_masks import mask, shadow_mask
-    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
-    boosted = cv2.cvtColor(cv2.convertScaleAbs(image, alpha=1.8), cv2.COLOR_BGR2LAB)
+    from roki_ng.vision.colour_masks import frame_lab
+    lab, boosted = colours if colours is not None else frame_lab(image)
     green = shadow_mask(lab, boosted, p, 'green_field')
     joined = cv2.morphologyEx(green, cv2.MORPH_CLOSE, np.ones((31, 31), np.uint8))
     count, field_ids, field_stats, _ = cv2.connectedComponentsWithStats(joined)
@@ -358,6 +504,10 @@ def goal_parts(image, p, projector, q, geometry, *, bearing_only=False):
     paint = shadow_mask(lab, boosted, p, 'white_marking')
     white_border = cv2.dilate(paint, np.ones((9, 9), np.uint8)) != 0
     parts = [] if bearing_only else field_obstacles(lab, turf, white_border, p, projector, q, geometry)
+    if feet_only:
+        return parts
+    if not bearing_only:
+        parts.extend(field_goal_hints(lab, turf, p, projector, q, geometry))
     for colour,recover in ((c,r) for c in ('blue','yellow','white') for r in (False,True)):
         if recover and (bearing_only or any(p['colour']==colour and p['kind']=='opening' for p in parts)):
             continue
@@ -388,7 +538,8 @@ def goal_parts(image, p, projector, q, geometry, *, bearing_only=False):
                     if min(bib[1],hi)-max(bib[0],lo) >= .4*min(hi-lo,bib[1]-bib[0]):
                         bib[:] = [min(lo,bib[0]),max(hi,bib[1])]
             parts.append(dict(kind='opening', colour=colour, points=ends, rect=rect,
-                              line_gaps=gaps, penalty_box=goal_box_support(ends,p,colour,white_border,projector,q,geometry),
+                              line_gaps=gaps, penalty_box=(painted_box_at_posts(lab, turf, p, left, right) or
+                                           goal_box_support(ends,p,colour,white_border,projector,q,geometry)),
                               keepers=bibs, occupied=sorted(bibs + occupied_goal_lanes(lab, left, right, rect)),
                               feet_px=[list(left), list(right)],
                               area=int(np.count_nonzero(binary[rect[1]:rect[3], rect[0]:rect[2]]))))
@@ -521,6 +672,13 @@ def goal_parts(image, p, projector, q, geometry, *, bearing_only=False):
             overlap = min(a[3], b[3])-max(a[1], b[1])
             if b[0]-a[2] >= 20 and overlap >= .4*min(a[3]-a[1], b[3]-b[1]):
                 opening(af, bf, [a[0], min(a[1], b[1]), b[2], max(a[3], b[3])])
+        if recover and colour != 'white' and not any(part['colour']==colour and part['kind']=='opening' for part in parts):
+            spec = next((p[f'field.goal.{i}'] for i in (0,1) if p[f'field.goal.{i}']['colour']==colour), None)
+            if spec and stats[1:,4].max(initial=0) > raw.size*.08:
+                posts_by_size = measured_uprights(raw, image, turf, projector, q, geometry, spec)
+                for a,b in combinations(sorted(posts_by_size),2):
+                    if .75*spec['width'] <= math.dist(a[3],b[3]) <= 1.25*spec['width']:
+                        opening(a[:2], b[:2], [a[0],min(a[2],b[2]),b[0],max(a[1],b[1])])
     # Individual feet are needed only for a partially observed frame.
     complete = {part['colour'] for part in parts if part['kind']=='opening' and part['colour']!='white'}
     unique = {}
@@ -620,6 +778,15 @@ class SceneTracker:
         old_ball = previous.get('ball') if valid else None
         ball = scene.get('ball')
         confirmed_ball = ball if ball and old_ball and math.dist(ball, old_ball) <= .06 else None
+        # These two projections share a stationary camera pose. Expose the
+        # observed roll even if the strategy reads only the second frame.
+        roll = None
+        if confirmed_ball:
+            dt = scene.get('received', 0.) - previous.get('received', 0.)
+            if .015 <= dt <= .4:
+                vx, vy = ((new-old)/dt for new, old in zip(ball, old_ball))
+                if .12 <= math.hypot(vx, vy) <= 2.5:
+                    roll = (vx, vy)
         parts = []
         for part in scene['parts']:
             if valid and any(old['kind'] == part['kind'] and old['colour'] == part['colour']
@@ -635,21 +802,30 @@ class SceneTracker:
             foot = None
         self.current = scene | {'frame_obstacles': [
             (part['points'][0], part['radius']) for part in scene['parts'] if part['kind'] == 'obstacle'
-        ], 'foot': foot, 'ball': confirmed_ball, 'parts': parts, 'confirmed': bool(valid)}
+        ], 'foot': foot, 'ball': confirmed_ball, 'roll_m_s': roll, 'parts': parts, 'confirmed': bool(valid)}
         return self.current
 
 
-def render_scene(image, scene, note, specs=(), own_colour=None, decision=None):
+def render_scene(image, scene, note, specs=(), own_colour=None, decision=None, candidates=(), shot_aim=None):
     import cv2
     import numpy as np
     output = image.copy()
+    for index, candidate in enumerate(candidates):
+        x, y, right, bottom = candidate['rect']
+        selected = index == 0 and scene and scene.get('ball')
+        colour = (0, 220, 0) if selected else (160, 160, 160)
+        cv2.rectangle(output, (x, y), (right, bottom), colour, 3 if selected else 1)
+        cv2.putText(output, 'target ball' if selected else 'ball candidate', (x, max(16, y-3)),
+                    cv2.FONT_HERSHEY_SIMPLEX, .45, colour, 1)
     if scene:
         foot = scene.get('foot')
-        if foot:
-            for leg, (x1, y, x2) in zip(('left', 'right'), foot['tips']):
+        tips = scene.get('toe_tips') or (foot or {}).get('tips') or []
+        if tips:
+            for leg, (x1, y, x2) in zip(('left', 'right'), tips):
                 cv2.line(output, (x1, y), (x2, y), (255, 255, 0), 3)
-                if leg == foot['leg']:
-                    cv2.putText(output, leg, (x1, y+17), cv2.FONT_HERSHEY_SIMPLEX, .5, (255,255,0), 1)
+                label = leg+' toe' if not foot or leg != foot['leg'] else leg+' strike toe'
+                cv2.putText(output, label, (x1, y+17), cv2.FONT_HERSHEY_SIMPLEX, .45, (255,255,0), 1)
+        if foot:
             x1,y1,x2,y2 = foot['ball_rect']
             cv2.rectangle(output, (x1,y1), (x2,y2), (0, 160, 255), 2)
         for part in scene['parts']:
@@ -664,6 +840,9 @@ def render_scene(image, scene, note, specs=(), own_colour=None, decision=None):
                         cv2.line(output,start,end,(255,255,0),2)
                 if part.get('penalty_box'):
                     cv2.putText(output,'box',(x,y+20),cv2.FONT_HERSHEY_SIMPLEX,.55,(0,240,120),2)
+                for lo, hi in part.get('keepers', []):
+                    centre = tuple(np.rint(left+(right-left)*(lo+hi)*.5).astype(int))
+                    cv2.putText(output, 'keeper', centre, cv2.FONT_HERSHEY_SIMPLEX, .55, (0, 100, 255), 2)
                 for lo, hi in part['occupied']:
                     start, end = [tuple(np.rint(left+(right-left)*t).astype(int)) for t in (lo, hi)]
                     cv2.line(output, start, end, (0, 0, 255), 6)
@@ -685,7 +864,7 @@ def render_scene(image, scene, note, specs=(), own_colour=None, decision=None):
                         feet = np.asarray(goal['opening_source']['feet_px'])
                         t = math.dist(goal['ends'][0], target)/math.dist(*goal['ends'])
                         aim = tuple(np.rint(feet[0]+t*(feet[1]-feet[0])).astype(int))
-                        cv2.drawMarker(output, aim, (255, 0, 255), cv2.MARKER_CROSS, 18, 2)
+                        cv2.circle(output, aim, 6, (255, 0, 255), 1)
             cv2.putText(inset, goal['colour']+' '+goal['elements'], (4, 20 if goal['colour'] == 'blue' else 40),
                         cv2.FONT_HERSHEY_SIMPLEX, .4, (255, 255, 255), 1)
         if scene.get('ball'):
@@ -693,6 +872,12 @@ def render_scene(image, scene, note, specs=(), own_colour=None, decision=None):
             cv2.circle(inset, point([bx, by]), 4, (0, 140, 255), -1)
             cv2.arrowedLine(inset, point([bx, by]), point([bx+2, by]), (0, 255, 0), 2)
         output[20:280, 550:790] = inset
+        if shot_aim and shot_aim.get('frame') == scene.get('sequence') and shot_aim.get('feet_px'):
+            left, right = np.asarray(shot_aim['feet_px'])
+            target = tuple(np.rint(left+(right-left)*shot_aim['fraction']).astype(int))
+            cv2.drawMarker(output, target, (255, 0, 255), cv2.MARKER_CROSS, 24, 3)
+            cv2.putText(output, 'SHOT TARGET', (max(0,target[0]-50), max(20,target[1]-14)),
+                        cv2.FONT_HERSHEY_SIMPLEX, .55, (255, 0, 255), 2)
     cv2.rectangle(output, (0, 540), (799, 649), (0, 0, 0), -1)
     ball = scene.get('ball') if scene else None
     text = f'BALL X={ball[0]*1000:.0f} Y={ball[1]*1000:+.0f} D={math.hypot(*ball)*1000:.0f} mm' if ball else 'BALL: no confirmed support-pose observation'

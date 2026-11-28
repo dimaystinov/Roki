@@ -250,6 +250,10 @@ class Supervisor:
             if self.mode != 'FAULT':
                 self.mode = 'IDLE'
 
+    def _game_media_recovery(self, role):
+        return (role in ('camera', 'detection', 'stream') and self.mode == 'GAME'
+                and self.game.info.get('running') and self.game.info.get('role') == 'simple_football')
+
     def worker_event(self, role, op, body):
         if role == 'motherboard' and self.game.simple:
             if op == 'body.telemetry':
@@ -294,6 +298,16 @@ class Supervisor:
             if role == "localisation":
                 self.log(role, "ERROR", body.get("error", "Localisation worker failed"))
                 return  # Diagnostic failure must not revoke manual control.
+            if self._game_media_recovery(role):
+                worker = self.workers.get(role)
+                if isinstance(worker, LazyWorkerPeer):
+                    self.spawn(worker.retire_failed(worker.peer))
+                if role in ('camera', 'detection'):
+                    self.game.vision_retry_at = time.monotonic() + 2
+                if role == 'camera':
+                    self.spawn(self._capture_fault(self.capture_session))
+                self.log(role, 'WARNING', f'Game continues after media failure: {body.get("error", role)}')
+                return
             self.mode = "FAULT"
             self.log(role, "ERROR", body.get("error", "worker failed"))
             if role in ("camera", "motherboard"):
@@ -1445,7 +1459,8 @@ class Supervisor:
                     continue  # Bounded ACM reopen may outlast a normal heartbeat.
                 if worker.alive and now - worker.last_heartbeat > 5:
                     worker._failed("Heartbeat timeout; process will be terminated")
-                    self.spawn(worker.close())
+                    if not self._game_media_recovery(worker.role):
+                        self.spawn(worker.close())
             if self.head_menu:
                 await self.head_menu.observe_game(self.game.state())
 

@@ -23,7 +23,7 @@ $env:PATH = "$Install/bin;$Install/lib;$env:PATH"
 Checked 'python' @('-c',"from pathlib import Path; from PySide6.QtCore import qVersion; Path('.deps/windows/qt-version.txt').write_text(qVersion())")
 if ($NativeOnly) { exit 0 }
 Checked (Join-Path $Root '..\Roki FPV.cmd') @('--check-gui')
-Checked 'python' @('-m','unittest','discover','-s','tests')
+Checked 'python' @('-m','pytest','tests','-q')
 Checked 'python' @('-m','PyInstaller','--noconfirm','packaging/fpv_roki.spec')
 # Проверка без DLL из conda и Visual Studio. У CI нет гарантированного GPU.
 $env:PATH = "$env:SystemRoot/System32;$env:SystemRoot"
@@ -39,7 +39,16 @@ foreach ($Test in @('--self-test-video','--self-test-qml-basic','--self-test-qml
     if ($Process.ExitCode -ne 0) { $FailedTests += "$Test ($($Process.ExitCode))" }
 }
 if ($FailedTests.Count) { throw "Failed: $FailedTests" }
+# Validate the real external upstream GUI using only frozen dependencies.
+$env:ROKI_UPSTREAM_LOG = Join-Path $Root 'upstream-self-test.log'
+$Process = Start-Process -FilePath 'dist/FPV Roki/FPV Roki.exe' -ArgumentList '--upstream-update-cli' -PassThru
+if (-not $Process.WaitForExit(240000)) { $Process.Kill(); throw 'Timeout: upstream updater' }
+Get-Content $env:ROKI_UPSTREAM_LOG -Encoding UTF8
+Remove-Item Env:ROKI_UPSTREAM_LOG
+if ($Process.ExitCode -ne 0) { throw 'Upstream frozen GUI validation failed' }
+Copy-Item 'packaging/Update-Operator-NG.cmd' 'dist/Update-Operator-NG.cmd'
+Copy-Item 'packaging/Run-Operator-NG.cmd' 'dist/Run-Operator-NG.cmd'
 Copy-Item 'packaging/Install-FPV-Roki.ps1' 'dist/Install-FPV-Roki.ps1'
-Compress-Archive -Path 'dist/FPV Roki','dist/Install-FPV-Roki.ps1' -DestinationPath 'dist/FPV-Roki-windows-x64.zip' -Force
+Compress-Archive -Path 'dist/FPV Roki','dist/Install-FPV-Roki.ps1','dist/Update-Operator-NG.cmd','dist/Run-Operator-NG.cmd' -DestinationPath 'dist/FPV-Roki-windows-x64.zip' -Force
 $Hash = (Get-FileHash 'dist/FPV-Roki-windows-x64.zip' -Algorithm SHA256).Hash.ToLower()
 Set-Content 'dist/FPV-Roki-windows-x64.zip.sha256' "$Hash  FPV-Roki-windows-x64.zip" -Encoding ascii

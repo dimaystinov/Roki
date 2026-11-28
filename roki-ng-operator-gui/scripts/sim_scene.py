@@ -25,6 +25,7 @@ DEFAULTS = {
     "viewer": {"azimuth_deg": 145.0, "elevation_deg": -32.0,
                "distance_m": 5.5, "lookat_xyz": [0.0, 0.0, 0.3]},
     "opponents": {"enabled": True},
+    "training": {"extra_balls": False},
     "person": {"enabled": False, "x_m": 1.7, "y_m": 0.0,
                "walk_amplitude_m": 0.0, "walk_period_s": 6.0},
     "layout": {
@@ -79,6 +80,8 @@ def validate_settings(changes):
         for value in viewer["lookat_xyz"]
     ):
         raise ValueError("lookat_xyz must contain three coordinates")
+    if type(result["training"]["extra_balls"]) is not bool:
+        raise ValueError("training.extra_balls must be boolean")
     if type(result["opponents"]["enabled"]) is not bool:
         raise ValueError("opponents.enabled must be boolean")
     person = result["person"]
@@ -171,9 +174,25 @@ def opponent_material(mesh, material):
 def soccer_model(scene, settings):
     """Reuse the neutral Roki CAD meshes and contact surfaces for both opponents."""
     import mujoco
-    if not settings["opponents"]["enabled"]:
-        return mujoco.MjModel.from_xml_path(str(scene))
     spec = mujoco.MjSpec.from_file(str(scene))
+    layout = settings["layout"]
+    for name, colour, size, x, y, z in (
+        ('yellow_cabinet', [.86,.67,.07,1], [.23,.43,.57], layout['yellow_goal_x_m']+.85, .40,.57),
+        ('blue_poster', [.05,.24,.88,1], [.018,.50,.32], layout['blue_goal_x_m']-.85,-.35,.90),
+    ):
+        spec.worldbody.add_geom(name=name, type=mujoco.mjtGeom.mjGEOM_BOX, rgba=colour,
+                                size=size, pos=[x,y,z], contype=0, conaffinity=0)
+    if settings.get('training', {}).get('extra_balls'):
+        source = spec.geom('ball')
+        for index, xy in enumerate(((-.38,.18),(-.68,-.30))):
+            name = f'training_ball_{index}'
+            body = spec.worldbody.add_body(name=name, pos=[*xy, source.size[0]])
+            body.add_freejoint()
+            body.add_geom(name=name, type=source.type, size=source.size, mass=source.mass, material=source.material)
+            pair = spec.pair('ball_carpet')
+            spec.add_pair(geomname1=name, geomname2='floor', condim=pair.condim, friction=pair.friction)
+    if not settings["opponents"]["enabled"]:
+        return spec.compile()
     neutral = spec.body("torso_1")
 
     def copy_links(source, fixed):

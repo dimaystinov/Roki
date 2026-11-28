@@ -7,7 +7,7 @@ import sys
 
 def test_video_editor_drafts_survive_polling():
     result = subprocess.run([sys.executable, str(Path(__file__).resolve()), '--qml'],
-                            env=dict(os.environ, QT_QPA_PLATFORM='offscreen'),
+                            env=dict(os.environ, QT_QPA_PLATFORM='cocoa' if sys.platform == 'darwin' else 'offscreen'),
                             capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
 
@@ -31,9 +31,10 @@ def exercise_qml():
     editor.setParentItem(window.contentItem())
     editor.setWidth(350)
     window.show()
+    assert QTest.qWaitForWindowExposed(window)
     number = editor.findChild(QObject, 'valueInput')
     number.forceActiveFocus()
-    QTest.keyClick(window, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+    QMetaObject.invokeMethod(number, 'selectAll')
     QTest.keyClick(window, Qt.Key.Key_5)
     QTest.keyClick(window, Qt.Key.Key_9)
     assert editor.property('dirty') is True
@@ -41,7 +42,7 @@ def exercise_qml():
         editor.setProperty('initialValue', value)
         editor.setProperty('meta', {'type':'int', 'min':1, 'max':120})
         QTest.qWait(20)
-        assert number.property('text') == '59'
+        assert number.property('text') == '59', number.property('text')
         assert number.hasActiveFocus()
     def js(code):
         expr = QQmlExpression(engine.rootContext(), editor, code)
