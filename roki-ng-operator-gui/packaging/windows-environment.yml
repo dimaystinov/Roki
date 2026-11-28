@@ -18,3 +18,4 @@ dependencies:
   - cmake
   - ninja
   - pyinstaller=6.*
+  - certifi

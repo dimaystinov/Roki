@@ -11,7 +11,7 @@ if [[ ! -f .deps/src/KDDockWidgets/CMakeLists.txt ]]; then
   tar -xf native/sources/KDDockWidgets-v2.4.1.tar.gz -C .deps/src/KDDockWidgets --strip-components=1
 fi
 [[ -x .deps/macos/venv/bin/python ]] || "$PYTHON" -m venv .deps/macos/venv
-.deps/macos/venv/bin/python -m pip install "PySide6==$QT_VERSION" 'msgpack>=1.1,<2' 'numpy>=2,<3'
+.deps/macos/venv/bin/python -m pip install "PySide6==$QT_VERSION" 'msgpack>=1.1,<2' 'numpy>=2,<3' certifi
 cmake -S .deps/src/KDDockWidgets -B .deps/macos/build -G Ninja \
   -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$QT_PREFIX" \
   -DCMAKE_PROJECT_INCLUDE="$PWD/native/macos/qt_sdk_compat.cmake" \

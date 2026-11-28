@@ -2,7 +2,7 @@
 
 Интерфейс основан на https://github.com/aleksey-yagubov/roki-ng-operator-gui .
 Пакет содержит Python, PySide6/Shiboken6, Qt, KDDockWidgets, PyGObject,
-GLib/GObject/GIRepository, GStreamer и плагины, FFmpeg/libav, NumPy и MessagePack.
+GLib/GObject/GIRepository, GStreamer и плагины, FFmpeg/libav, NumPy, MessagePack и certifi (корневые сертификаты Mozilla, MPL-2.0).
 Локальный тест H.264 использует x264. Это не собственные компоненты FPV Roki;
 применяются лицензии соответствующих авторов, в том числе LGPL и GPL.
 
@@ -17,6 +17,7 @@ GLib/GObject/GIRepository, GStreamer и плагины, FFmpeg/libav, NumPy и M
 - https://code.videolan.org/videolan/x264
 - https://github.com/numpy/numpy
 - https://github.com/msgpack/msgpack-python
+- https://github.com/certifi/python-certifi
 
 Сборочные сценарии и конфигурация зависимостей находятся в packaging/ исходного
 проекта. Сторонние библиотеки поставляются отдельными динамическими файлами,

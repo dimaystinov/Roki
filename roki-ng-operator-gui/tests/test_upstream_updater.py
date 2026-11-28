@@ -52,3 +52,14 @@ class UpstreamUpdaterTests(unittest.TestCase):
             extract_source(archive((link,'../../linux-only')),target)
             self.assertFalse((target/'native').exists())
             self.assertTrue((target/'roki_operator.py').exists())
+
+    def test_tls_verifies_hosts_without_developer_ca_directories(self):
+        import ssl
+        from unittest.mock import patch
+        from upstream_updater import tls_context
+        with tempfile.TemporaryDirectory() as d, patch.dict('os.environ', {
+                'SSL_CERT_FILE':str(Path(d)/'missing.pem'), 'SSL_CERT_DIR':str(Path(d)/'missing')}):
+            context=tls_context()
+            self.assertEqual(context.verify_mode,ssl.CERT_REQUIRED)
+            self.assertTrue(context.check_hostname)
+            self.assertGreater(len(context.get_ca_certs()),0)

@@ -9,6 +9,8 @@ from pathlib import Path, PurePosixPath
 import re
 import shutil
 import stat
+import ssl
+import certifi
 import subprocess
 import sys
 import tempfile
@@ -29,9 +31,17 @@ def home():
     return base/'Roki-Yagubov-Operator'
 
 
+def tls_context():
+    # Include Mozilla roots so frozen builds do not depend on Homebrew/conda
+    # certificate paths from the developer machine. Retain OS trust as well.
+    context = ssl.create_default_context()
+    context.load_verify_locations(cafile=certifi.where())
+    return context
+
+
 def get(url):
     request=urllib.request.Request(url,headers={'User-Agent':'Roki-Upstream-Updater','Accept':'application/vnd.github+json'})
-    with urllib.request.urlopen(request,timeout=60) as response:
+    with urllib.request.urlopen(request,timeout=60,context=tls_context()) as response:
         data=response.read(LIMIT+1)
     if len(data)>LIMIT:raise ValueError('Download exceeds 150 MiB')
     return data
