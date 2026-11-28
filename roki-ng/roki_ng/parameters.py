@@ -217,11 +217,14 @@ class Parameters:
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(name, self.path)
-            fd = os.open(self.path.parent, os.O_DIRECTORY)
-            try:
-                os.fsync(fd)
-            finally:
-                os.close(fd)
+            # Windows has no directory fsync; keep the file flush and atomic
+            # replace there. POSIX additionally persists the directory entry.
+            if hasattr(os, "O_DIRECTORY"):
+                fd = os.open(self.path.parent, os.O_DIRECTORY)
+                try:
+                    os.fsync(fd)
+                finally:
+                    os.close(fd)
         finally:
             if os.path.exists(name):
                 os.unlink(name)

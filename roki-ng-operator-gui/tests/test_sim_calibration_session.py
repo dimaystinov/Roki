@@ -242,3 +242,13 @@ def test_game_subscription_records_live_simulator_phase_in_fpv(simulator, tmp_pa
     finally:
         client.shutdown()
         app.processEvents()
+
+
+def test_parameter_save_without_posix_directory_sync(tmp_path, monkeypatch):
+    import os
+    monkeypatch.delattr(os, "O_DIRECTORY", raising=False)
+    parameters = sim.Parameters(tmp_path, robot_model="roki2")
+    parameters.save(parameters.values)
+    reloaded = sim.Parameters(tmp_path, robot_model="roki2")
+    assert reloaded.values == parameters.values
+    assert not list(tmp_path.glob(".params-*"))

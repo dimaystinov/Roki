@@ -13,6 +13,7 @@ def test_calibration_panel():
 
 
 def exercise():
+    import roki_operator  # Apply the same Windows Qt interpreter settings as the app.
     import tempfile
     from PySide6.QtCore import QMetaObject, QUrl
     from PySide6.QtGui import QGuiApplication

@@ -45,10 +45,14 @@ def match_model(spectators=False):
                         element.set(key, prefix + element.get(key))
             parent.append(node)
     # Preserve relative paths to the existing shared CAD and textures.
-    with tempfile.NamedTemporaryFile(dir=sim.SCENE.parent, suffix=".xml") as xml:
-        scene.write(xml, encoding="utf-8")
-        xml.flush()
-        return mujoco.MjModel.from_xml_path(xml.name)
+    with tempfile.NamedTemporaryFile(dir=sim.SCENE.parent, suffix=".xml", delete=False) as xml:
+        filename = Path(xml.name)
+    # Close the Windows file handle before MuJoCo reopens the XML.
+    try:
+        scene.write(filename, encoding="utf-8")
+        return mujoco.MjModel.from_xml_path(str(filename))
+    finally:
+        filename.unlink(missing_ok=True)
 
 
 class PlayerData:
